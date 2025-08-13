@@ -215,7 +215,7 @@ func parseDocument(data []byte) (Document, error) {
 func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool) error {
 	combined := Document{}
 	combined.Components.Schemas = map[string]*Schema{}
-	skipped := 0
+	overridden := 0
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -228,10 +228,9 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 		}
 		for name, schema := range doc.Components.Schemas {
 			if _, exists := combined.Components.Schemas[name]; exists {
-				skipped++ // 简单策略: 保留第一个
-				continue
+				overridden++
 			}
-			combined.Components.Schemas[name] = schema
+			combined.Components.Schemas[name] = schema // 后者覆盖前者
 		}
 	}
 	if len(combined.Components.Schemas) == 0 {
@@ -241,8 +240,8 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 	b.WriteString("syntax = \"proto3\";\n")
 	b.WriteString(fmt.Sprintf("package %s;\n", pkg))
 	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n\n", goPkg))
-	if skipped > 0 {
-		b.WriteString(fmt.Sprintf("// 注意: 有 %d 个重复 schema 名被忽略 (使用首次定义)\n\n", skipped))
+	if overridden > 0 {
+		b.WriteString(fmt.Sprintf("// 注意: 有 %d 个重复 schema 名被后续文件覆盖 (采用最后出现版本)\n\n", overridden))
 	}
 	names := make([]string, 0, len(combined.Components.Schemas))
 	for n := range combined.Components.Schemas {
