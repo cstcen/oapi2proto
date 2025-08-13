@@ -345,14 +345,36 @@ func toEnumValue(s string) string {
 }
 
 func upperCamel(s string) string {
+	if s == "" {
+		return ""
+	}
 	parts := strings.Split(s, "_")
 	for i, p := range parts {
 		if p == "" {
 			continue
 		}
-		parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
+		// Keep all-caps acronyms (length>1) as-is
+		if isAllUpper(p) && len(p) > 1 {
+			parts[i] = p
+			continue
+		}
+		if len(p) == 1 {
+			parts[i] = strings.ToUpper(p)
+			continue
+		}
+		// Capitalize first rune, preserve existing inner capitalization (do not force lowercase)
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
 	}
 	return strings.Join(parts, "")
+}
+
+func isAllUpper(s string) bool {
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			return false
+		}
+	}
+	return true
 }
 func lowerSnake(s string) string {
 	s = strings.TrimSpace(s)
