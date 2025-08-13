@@ -1,6 +1,6 @@
 # OpenAPI v3 -> Proto3 Minimal Generator
 
-Purpose: Convert a subset of OpenAPI 3.0 schemas under `components.schemas` into a starting `.proto` file for further manual refinement.
+Purpose: Convert a subset of OpenAPI 3.0 schemas under `components.schemas` into a starting `.proto` file for further manual refinement. Supports JSON or YAML input transparently.
 
 Status: MVP (supports objects, enums, arrays, maps, oneOf (as oneof), allOf (merge), primitive formats, $ref resolution).
 
@@ -17,6 +17,7 @@ go build -o oapi2proto ./cmd/oapi2proto
 ## Scope & Limitations
 
 - Only processes `components.schemas`; paths -> service rpc generation not yet included.
+- Input can be either `.json` or `.yaml` / `.yml`; auto-detected (attempts JSON then YAML parsing).
 - anyOf: treated like oneOf unless `--anyof=repeat` specified.
 - Field numbering: stable by iteration order (refs resolved first), or alphabetical if `--sort`.
 - Nullable: renders as `optional` for scalars if `--use-optional`; otherwise comment.

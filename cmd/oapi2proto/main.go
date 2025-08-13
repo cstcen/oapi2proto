@@ -9,33 +9,35 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Simplified OAS structures (minimal fields used)
 type Document struct {
 	Components struct {
-		Schemas map[string]*Schema `json:"schemas"`
-	} `json:"components"`
+		Schemas map[string]*Schema `json:"schemas" yaml:"schemas"`
+	} `json:"components" yaml:"components"`
 }
 
 type Schema struct {
-	Ref         string             `json:"$ref"`
-	Type        string             `json:"type"`
-	Format      string             `json:"format"`
-	Enum        []string           `json:"enum"`
-	Properties  map[string]*Schema `json:"properties"`
-	Items       *Schema            `json:"items"`
-	OneOf       []*Schema          `json:"oneOf"`
-	AllOf       []*Schema          `json:"allOf"`
-	AnyOf       []*Schema          `json:"anyOf"`
-	Required    []string           `json:"required"`
-	Nullable    bool               `json:"nullable"`
-	AddlProps   *Schema            `json:"additionalProperties"`
-	Description string             `json:"description"`
+	Ref         string             `json:"$ref" yaml:"$ref"`
+	Type        string             `json:"type" yaml:"type"`
+	Format      string             `json:"format" yaml:"format"`
+	Enum        []string           `json:"enum" yaml:"enum"`
+	Properties  map[string]*Schema `json:"properties" yaml:"properties"`
+	Items       *Schema            `json:"items" yaml:"items"`
+	OneOf       []*Schema          `json:"oneOf" yaml:"oneOf"`
+	AllOf       []*Schema          `json:"allOf" yaml:"allOf"`
+	AnyOf       []*Schema          `json:"anyOf" yaml:"anyOf"`
+	Required    []string           `json:"required" yaml:"required"`
+	Nullable    bool               `json:"nullable" yaml:"nullable"`
+	AddlProps   *Schema            `json:"additionalProperties" yaml:"additionalProperties"`
+	Description string             `json:"description" yaml:"description"`
 }
 
 func main() {
-	in := flag.String("in", "openapi.json", "openapi v3 file (json or yaml; yaml requires yq pre-conversion)")
+	in := flag.String("in", "openapi.json", "openapi v3 file (json or yaml)")
 	out := flag.String("out", "api.proto", "output proto file path")
 	pkg := flag.String("pkg", "api.v1", "proto package")
 	goPkg := flag.String("go_pkg", "example.com/project/api/v1;v1", "go_package option value")
@@ -49,16 +51,18 @@ func main() {
 		fatal(err)
 	}
 
-	// naive YAML detection: if contains ':' and not starting with '{'
-	trim := strings.TrimSpace(string(data))
-	if strings.HasPrefix(trim, "openapi:") || strings.Contains(trim, "\ncomponents:") {
-		// attempt conversion via environment: user must pre-convert or use yq; here just fail with message
-		fatal(errors.New("YAML input: please convert to JSON first (e.g. yq -o=json eval openapi.yaml > openapi.json)"))
-	}
-
 	var doc Document
-	if err := json.Unmarshal(data, &doc); err != nil {
-		fatal(fmt.Errorf("parse json: %w", err))
+	var jsonErr error
+	if jErr := json.Unmarshal(data, &doc); jErr != nil || len(doc.Components.Schemas) == 0 {
+		jsonErr = jErr
+		// attempt YAML
+		var ydoc Document
+		yErr := yaml.Unmarshal(data, &ydoc)
+		if yErr == nil && len(ydoc.Components.Schemas) > 0 {
+			doc = ydoc
+		} else if jsonErr != nil { // both failed or empty
+			fatal(fmt.Errorf("parse openapi (json/yaml) failed: jsonErr=%v yamlErr=%v", jsonErr, yErr))
+		}
 	}
 
 	if len(doc.Components.Schemas) == 0 {
