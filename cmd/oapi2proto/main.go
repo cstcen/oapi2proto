@@ -5,10 +5,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
-	"path"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -37,64 +39,172 @@ type Schema struct {
 }
 
 func main() {
-	in := flag.String("in", "openapi.json", "openapi v3 file (json or yaml)")
-	out := flag.String("out", "api.proto", "output proto file path")
+	in := flag.String("in", "openapi.json", "openapi v3 文件或目录 (json|yaml|yml)")
+	out := flag.String("out", "api.proto", "输出 proto 文件 (单文件模式) 或目录 (目录输入模式)")
 	pkg := flag.String("pkg", "api.v1", "proto package")
 	goPkg := flag.String("go_pkg", "example.com/project/api/v1;v1", "go_package option value")
-	useOptional := flag.Bool("use-optional", true, "emit 'optional' for nullable scalars")
-	anyOfMode := flag.String("anyof", "oneof", "anyof handling: oneof|repeat")
-	sortFields := flag.Bool("sort", true, "sort fields & schemas alphabetically for stability")
+	useOptional := flag.Bool("use-optional", true, "为 nullable 标量生成 optional")
+	anyOfMode := flag.String("anyof", "oneof", "anyof 处理: oneof|repeat")
+	sortFields := flag.Bool("sort", true, "按字母排序 schema 与字段以获得稳定结果")
+	parallel := flag.Int("parallel", 0, "并行文件数量 (0=auto,1=串行)")
 	flag.Parse()
 
-	data, err := os.ReadFile(*in)
+	info, err := os.Stat(*in)
 	if err != nil {
 		fatal(err)
 	}
 
-	var doc Document
-	var jsonErr error
-	if jErr := json.Unmarshal(data, &doc); jErr != nil || len(doc.Components.Schemas) == 0 {
-		jsonErr = jErr
-		// attempt YAML
-		var ydoc Document
-		yErr := yaml.Unmarshal(data, &ydoc)
-		if yErr == nil && len(ydoc.Components.Schemas) > 0 {
-			doc = ydoc
-		} else if jsonErr != nil { // both failed or empty
-			fatal(fmt.Errorf("parse openapi (json/yaml) failed: jsonErr=%v yamlErr=%v", jsonErr, yErr))
+	// 单文件行为维持原样
+	if !info.IsDir() {
+		if err := generateForFile(*in, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	// 目录模式: 遍历所有 .json .yaml .yml
+	outDir := *out
+	// 如果 out 是默认值且包含 .proto, 说明用户未指定目录，则改为 "protos" 目录
+	if strings.HasSuffix(strings.ToLower(outDir), ".proto") {
+		outDir = filepath.Dir(outDir)
+		if outDir == "." || outDir == "" {
+			outDir = "protos"
 		}
 	}
-
-	if len(doc.Components.Schemas) == 0 {
-		fatal(errors.New("no components.schemas found"))
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		fatal(err)
 	}
 
+	// 收集文件
+	var files []string
+	walkFn := func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		lower := strings.ToLower(d.Name())
+		if strings.HasSuffix(lower, ".json") || strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") {
+			files = append(files, p)
+		}
+		return nil
+	}
+	if err := filepath.WalkDir(*in, walkFn); err != nil {
+		fatal(err)
+	}
+	if len(files) == 0 {
+		fatal(errors.New("目录下未找到 openapi 文件 (*.json|*.yaml|*.yml)"))
+	}
+	sort.Strings(files)
+
+	// 简单的并行控制
+	workerN := *parallel
+	if workerN <= 0 {
+		if len(files) <= 4 {
+			workerN = len(files)
+		} else {
+			workerN = 4 // 默认限制
+		}
+	}
+	if workerN < 1 {
+		workerN = 1
+	}
+
+	type job struct{ inFile string }
+	type result struct {
+		file string
+		err  error
+	}
+	jobs := make(chan job)
+	results := make(chan result)
+
+	for w := 0; w < workerN; w++ {
+		go func() {
+			for j := range jobs {
+				base := filepath.Base(j.inFile)
+				base = strings.TrimSuffix(base, filepath.Ext(base))
+				outFile := filepath.Join(outDir, base+".proto")
+				rErr := generateForFile(j.inFile, outFile, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields)
+				results <- result{file: j.inFile, err: rErr}
+			}
+		}()
+	}
+	go func() {
+		for _, f := range files {
+			jobs <- job{inFile: f}
+		}
+		close(jobs)
+	}()
+
+	var failed []string
+	for i := 0; i < len(files); i++ {
+		r := <-results
+		if r.err != nil {
+			fmt.Fprintf(os.Stderr, "[FAIL] %s: %v\n", r.file, r.err)
+			failed = append(failed, r.file)
+		} else {
+			fmt.Fprintf(os.Stderr, "[OK]   %s (%s)\n", r.file, time.Now().Format("15:04:05"))
+		}
+	}
+	if len(failed) > 0 {
+		fatal(fmt.Errorf("%d 个文件生成失败", len(failed)))
+	}
+}
+
+// generateForFile 处理单个 openapi 文件 -> proto
+func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool) error {
+	data, err := os.ReadFile(inFile)
+	if err != nil {
+		return err
+	}
+	doc, err := parseDocument(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", inFile, err)
+	}
 	var b strings.Builder
 	b.WriteString("syntax = \"proto3\";\n")
-	b.WriteString(fmt.Sprintf("package %s;\n", *pkg))
-	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n\n", *goPkg))
+	b.WriteString(fmt.Sprintf("package %s;\n", pkg))
+	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n\n", goPkg))
 
-	// Collect schema names
 	names := make([]string, 0, len(doc.Components.Schemas))
 	for name := range doc.Components.Schemas {
 		names = append(names, name)
 	}
-	if *sortFields {
+	if sortFields {
 		sort.Strings(names)
 	}
-
-	ctx := &genContext{doc: &doc, useOptional: *useOptional, anyOfMode: *anyOfMode, sortFields: *sortFields, visited: map[string]bool{}}
-
+	ctx := &genContext{doc: &doc, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, visited: map[string]bool{}}
 	for _, name := range names {
 		ctx.emitSchema(&b, name, doc.Components.Schemas[name])
 	}
+	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(outFile, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
 
-	if err := os.MkdirAll(path.Dir(*out), 0o755); err != nil {
-		fatal(err)
+// parseDocument 尝试 json / yaml
+func parseDocument(data []byte) (Document, error) {
+	var doc Document
+	var jsonErr error
+	if jErr := json.Unmarshal(data, &doc); jErr != nil || len(doc.Components.Schemas) == 0 {
+		jsonErr = jErr
+		var ydoc Document
+		yErr := yaml.Unmarshal(data, &ydoc)
+		if yErr == nil && len(ydoc.Components.Schemas) > 0 {
+			doc = ydoc
+		} else if jsonErr != nil {
+			return Document{}, fmt.Errorf("parse openapi (json/yaml) failed: jsonErr=%v yamlErr=%v", jsonErr, yErr)
+		}
 	}
-	if err := os.WriteFile(*out, []byte(b.String()), 0o644); err != nil {
-		fatal(err)
+	if len(doc.Components.Schemas) == 0 {
+		return Document{}, errors.New("no components.schemas found")
 	}
+	return doc, nil
 }
 
 type genContext struct {
