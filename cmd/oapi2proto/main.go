@@ -84,6 +84,8 @@ func main() {
 	}
 
 	ctx := &genContext{doc: &doc, useOptional: *useOptional, anyOfMode: *anyOfMode, sortFields: *sortFields, visited: map[string]bool{}}
+	ctx.sigToName = make(map[string]string) // shape signature -> message name
+	ctx.nameToSig = make(map[string]string) // message name -> shape signature
 
 	for _, name := range names {
 		ctx.emitSchema(&b, name, doc.Components.Schemas[name])
@@ -103,6 +105,8 @@ type genContext struct {
 	anyOfMode   string
 	sortFields  bool
 	visited     map[string]bool
+	sigToName   map[string]string
+	nameToSig   map[string]string
 }
 
 func (g *genContext) emitSchema(b *strings.Builder, name string, s *Schema) {
@@ -136,6 +140,22 @@ func (g *genContext) emitEnum(b *strings.Builder, name string, s *Schema) {
 
 func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	msgName := normalizeMessage(name)
+	sig := g.schemaSignature(s)
+	if existing, ok := g.sigToName[sig]; ok && existing != msgName {
+		// shape already emitted under another name; alias by skipping duplicate emit
+		if !g.visited[msgName] {
+			g.visited[msgName] = true
+		}
+		return
+	}
+	if g.sigToName == nil {
+		g.sigToName = map[string]string{}
+	}
+	if g.nameToSig == nil {
+		g.nameToSig = map[string]string{}
+	}
+	g.sigToName[sig] = msgName
+	g.nameToSig[msgName] = sig
 	b.WriteString(fmt.Sprintf("message %s {\n", msgName))
 	// Merge allOf properties first
 	merged := &Schema{Properties: map[string]*Schema{}, Required: s.Required}
@@ -157,12 +177,24 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	if g.sortFields {
 		sort.Strings(propNames)
 	}
+	// Collect nested schemas to emit later (flatten)
+	type pending struct {
+		name   string
+		schema *Schema
+	}
+	var toEmit []pending
 	for _, prop := range propNames {
 		ps := merged.Properties[prop]
 		ptype, nested := g.fieldType(prop, ps)
-		if nested != nil { // ensure nested emitted
-			nestedName := nested[0].(string)
-			g.emitSchema(b, nestedName, nested[1].(*Schema))
+		if nested != nil { // defer emission for flatten, rename with parent prefix
+			baseNestedName := nested[0].(string)
+			flatName := g.simplifyNestedName(msgName, baseNestedName)
+			// replace ptype with flattened name
+			ptype = flatName
+			// schedule emission if not visited yet under new name
+			if !g.visited[flatName] {
+				toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
+			}
 		}
 		opt := ""
 		if ps.Nullable && g.useOptional && isScalar(ptype) {
@@ -193,7 +225,12 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 			idx++
 			pt, nested := g.fieldType(fmt.Sprintf("choice_%d", idx), branch)
 			if nested != nil {
-				g.emitSchema(b, nested[0].(string), nested[1].(*Schema))
+				baseNestedName := nested[0].(string)
+				flatName := g.simplifyNestedName(msgName, baseNestedName)
+				pt = flatName
+				if !g.visited[flatName] {
+					toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
+				}
 			}
 			b.WriteString(fmt.Sprintf("    %s %s = %d;\n", pt, fmt.Sprintf("choice_%d", idx), fieldNum))
 			fieldNum++
@@ -203,7 +240,15 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	// anyOf handling
 	if len(s.AnyOf) > 0 {
 		if g.anyOfMode == "repeat" {
-			pt, _ := g.fieldType("anyof_value", s.AnyOf[0])
+			pt, nested := g.fieldType("anyof_value", s.AnyOf[0])
+			if nested != nil {
+				baseNestedName := nested[0].(string)
+				flatName := g.simplifyNestedName(msgName, baseNestedName)
+				pt = flatName
+				if !g.visited[flatName] {
+					toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
+				}
+			}
 			b.WriteString(fmt.Sprintf("  repeated %s anyof_value = %d; // anyOf first schema repeated\n", pt, fieldNum))
 			fieldNum++
 		} else {
@@ -213,7 +258,12 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 				idx++
 				pt, nested := g.fieldType(fmt.Sprintf("alt_%d", idx), branch)
 				if nested != nil {
-					g.emitSchema(b, nested[0].(string), nested[1].(*Schema))
+					baseNestedName := nested[0].(string)
+					flatName := g.simplifyNestedName(msgName, baseNestedName)
+					pt = flatName
+					if !g.visited[flatName] {
+						toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
+					}
 				}
 				b.WriteString(fmt.Sprintf("    %s alt_%d = %d;\n", pt, idx, fieldNum))
 				fieldNum++
@@ -223,6 +273,10 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	}
 
 	b.WriteString("}\n\n")
+	// Emit deferred nested schemas top-level after parent
+	for _, p := range toEmit {
+		g.emitSchema(b, p.name, p.schema)
+	}
 }
 
 func mergeInto(base *Schema, add *Schema) *Schema {
@@ -408,3 +462,86 @@ func isScalar(t string) bool {
 }
 
 func fatal(err error) { fmt.Fprintln(os.Stderr, "error:", err); os.Exit(1) }
+
+// schemaSignature builds a structural signature for a schema to allow deduplication of inline shapes.
+func (g *genContext) schemaSignature(s *Schema) string {
+	if s == nil {
+		return "nil"
+	}
+	s = g.resolveRef(s)
+	// enums: unique by enum values
+	if len(s.Enum) > 0 {
+		return "enum:" + strings.Join(s.Enum, ",")
+	}
+	var b strings.Builder
+	b.WriteString("t=" + s.Type)
+	if s.Format != "" {
+		b.WriteString("|f=" + s.Format)
+	}
+	if s.Nullable {
+		b.WriteString("|n")
+	}
+	// properties (sorted)
+	if len(s.Properties) > 0 {
+		keys := make([]string, 0, len(s.Properties))
+		for k := range s.Properties {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("|p=")
+		for _, k := range keys {
+			b.WriteString(k + "<" + g.schemaSignature(s.Properties[k]) + ">;")
+		}
+	}
+	if s.Items != nil {
+		b.WriteString("|items=" + g.schemaSignature(s.Items))
+	}
+	if s.AddlProps != nil {
+		b.WriteString("|map=" + g.schemaSignature(s.AddlProps))
+	}
+	if len(s.OneOf) > 0 {
+		b.WriteString("|oneof=")
+		for _, c := range s.OneOf {
+			b.WriteString(g.schemaSignature(c) + ";")
+		}
+	}
+	if len(s.AnyOf) > 0 {
+		b.WriteString("|anyof=")
+		for _, c := range s.AnyOf {
+			b.WriteString(g.schemaSignature(c) + ";")
+		}
+	}
+	if len(s.AllOf) > 0 {
+		b.WriteString("|allof=")
+		for _, c := range s.AllOf {
+			b.WriteString(g.schemaSignature(c) + ";")
+		}
+	}
+	return b.String()
+}
+
+// simplifyNestedName removes redundant repeated suffixes like OrderItemsItem -> OrderItem.
+func (g *genContext) simplifyNestedName(parent, child string) string {
+	parent = normalizeMessage(parent)
+	child = normalizeMessage(child)
+	// If child already starts with parent, just use child.
+	if strings.HasPrefix(child, parent) {
+		return child
+	}
+	// Collapse trailing 'ItemsItem' / 'ListItem' patterns
+	if strings.HasSuffix(parent, "Items") && strings.HasPrefix(child, parent+"Item") {
+		return parent[:len(parent)-5] + "Item"
+	}
+	if strings.HasSuffix(parent, "Items") && child == parent+"ItemsItem" { // safety
+		return parent[:len(parent)-5] + "Item"
+	}
+	if strings.HasSuffix(parent, "List") && child == parent+"Item" {
+		return parent + "Item"
+	}
+	// Generic collapse: if child == parent + parentSuffix, keep shorter
+	if strings.HasSuffix(child, parent) && len(child) > len(parent) {
+		return child
+	}
+	// Default: Parent + child
+	return normalizeMessage(parent + "_" + child)
+}

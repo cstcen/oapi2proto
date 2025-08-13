@@ -1,0 +1,25 @@
+syntax = "proto3";
+package api.v1;
+option go_package = "example.com/project/api/v1;v1";
+
+message Order {
+  OrderCustomer customer = 1;
+  string id = 2;
+  OrderItemsItem items = 3;
+}
+
+message OrderCustomer {
+  OrderCustomerAddress address = 1;
+  string name = 2;
+}
+
+message OrderCustomerAddress {
+  string city = 1;
+  string zip = 2;
+}
+
+message OrderItemsItem {
+  int64 qty = 1;
+  string sku = 2;
+}
+
