@@ -61,21 +61,10 @@ func main() {
 		}
 		return
 	}
+	// 是否合并为单一 proto 文件: 目录输入 + 输出以 .proto 结尾
+	combine := strings.HasSuffix(strings.ToLower(*out), ".proto")
 
-	// 目录模式: 遍历所有 .json .yaml .yml
-	outDir := *out
-	// 如果 out 是默认值且包含 .proto, 说明用户未指定目录，则改为 "protos" 目录
-	if strings.HasSuffix(strings.ToLower(outDir), ".proto") {
-		outDir = filepath.Dir(outDir)
-		if outDir == "." || outDir == "" {
-			outDir = "protos"
-		}
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		fatal(err)
-	}
-
-	// 收集文件
+	// 收集文件 (目录模式通用)
 	var files []string
 	walkFn := func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -98,19 +87,36 @@ func main() {
 	}
 	sort.Strings(files)
 
-	// 简单的并行控制
+	if combine {
+		if err := generateCombined(files, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	// 分散模式: 输出目录
+	outDir := *out
+	if strings.HasSuffix(strings.ToLower(outDir), ".proto") { // 用户给了 proto 但我们非 combine 模式 (理论不会触发)
+		outDir = filepath.Dir(outDir)
+		if outDir == "." || outDir == "" {
+			outDir = "protos"
+		}
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		fatal(err)
+	}
+
 	workerN := *parallel
 	if workerN <= 0 {
 		if len(files) <= 4 {
 			workerN = len(files)
 		} else {
-			workerN = 4 // 默认限制
+			workerN = 4
 		}
 	}
 	if workerN < 1 {
 		workerN = 1
 	}
-
 	type job struct{ inFile string }
 	type result struct {
 		file string
@@ -118,7 +124,6 @@ func main() {
 	}
 	jobs := make(chan job)
 	results := make(chan result)
-
 	for w := 0; w < workerN; w++ {
 		go func() {
 			for j := range jobs {
@@ -136,7 +141,6 @@ func main() {
 		}
 		close(jobs)
 	}()
-
 	var failed []string
 	for i := 0; i < len(files); i++ {
 		r := <-results
@@ -205,6 +209,56 @@ func parseDocument(data []byte) (Document, error) {
 		return Document{}, errors.New("no components.schemas found")
 	}
 	return doc, nil
+}
+
+// generateCombined 聚合多个 openapi 文件为单一 proto，重复 schema 名只保留首次出现
+func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool) error {
+	combined := Document{}
+	combined.Components.Schemas = map[string]*Schema{}
+	skipped := 0
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		doc, err := parseDocument(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] 跳过 %s: %v\n", f, err)
+			continue
+		}
+		for name, schema := range doc.Components.Schemas {
+			if _, exists := combined.Components.Schemas[name]; exists {
+				skipped++ // 简单策略: 保留第一个
+				continue
+			}
+			combined.Components.Schemas[name] = schema
+		}
+	}
+	if len(combined.Components.Schemas) == 0 {
+		return errors.New("无有效 schema 可生成")
+	}
+	var b strings.Builder
+	b.WriteString("syntax = \"proto3\";\n")
+	b.WriteString(fmt.Sprintf("package %s;\n", pkg))
+	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n\n", goPkg))
+	if skipped > 0 {
+		b.WriteString(fmt.Sprintf("// 注意: 有 %d 个重复 schema 名被忽略 (使用首次定义)\n\n", skipped))
+	}
+	names := make([]string, 0, len(combined.Components.Schemas))
+	for n := range combined.Components.Schemas {
+		names = append(names, n)
+	}
+	if sortFields {
+		sort.Strings(names)
+	}
+	ctx := &genContext{doc: &combined, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, visited: map[string]bool{}}
+	for _, n := range names {
+		ctx.emitSchema(&b, n, combined.Components.Schemas[n])
+	}
+	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(outFile, []byte(b.String()), 0o644)
 }
 
 type genContext struct {
