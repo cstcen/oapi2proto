@@ -332,8 +332,8 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 		if nested != nil { // defer emission for flatten, rename with parent prefix
 			baseNestedName := nested[0].(string)
 			flatName := normalizeMessage(msgName + "_" + baseNestedName)
-			// replace ptype with flattened name
-			ptype = flatName
+			// Preserve qualifiers like "repeated" or "map<...>" by replacing only the nested type token
+			ptype = strings.ReplaceAll(ptype, baseNestedName, flatName)
 			// schedule emission if not visited yet under new name
 			if !g.visited[flatName] {
 				toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
@@ -370,7 +370,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 			if nested != nil {
 				baseNestedName := nested[0].(string)
 				flatName := normalizeMessage(msgName + "_" + baseNestedName)
-				pt = flatName
+				pt = strings.ReplaceAll(pt, baseNestedName, flatName)
 				if !g.visited[flatName] {
 					toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
 				}
@@ -387,7 +387,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 			if nested != nil {
 				baseNestedName := nested[0].(string)
 				flatName := normalizeMessage(msgName + "_" + baseNestedName)
-				pt = flatName
+				pt = strings.ReplaceAll(pt, baseNestedName, flatName)
 				if !g.visited[flatName] {
 					toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
 				}
@@ -403,7 +403,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 				if nested != nil {
 					baseNestedName := nested[0].(string)
 					flatName := normalizeMessage(msgName + "_" + baseNestedName)
-					pt = flatName
+					pt = strings.ReplaceAll(pt, baseNestedName, flatName)
 					if !g.visited[flatName] {
 						toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
 					}
