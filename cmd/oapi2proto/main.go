@@ -300,16 +300,8 @@ func (g *genContext) emitEnum(b *strings.Builder, name string, s *Schema) {
 func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	msgName := normalizeMessage(name)
 	b.WriteString(fmt.Sprintf("message %s {\n", msgName))
-	// Merge allOf properties first
-	merged := &Schema{Properties: map[string]*Schema{}, Required: s.Required}
-	// allOf merge
-	for _, part := range s.AllOf {
-		merged = mergeInto(merged, g.resolveRef(part))
-	}
-	// base properties
-	for k, v := range s.Properties {
-		merged.Properties[k] = v
-	}
+	// Expand/flatten allOf semantics (inheritance/aggregation)
+	merged := g.flattenAllOf(s)
 
 	// Track field numbers
 	fieldNum := 1
@@ -352,8 +344,8 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	}
 
 	// map type
-	if s.AddlProps != nil && len(merged.Properties) == 0 {
-		valType, nested := g.fieldType("value", s.AddlProps)
+	if merged.AddlProps != nil && len(merged.Properties) == 0 {
+		valType, nested := g.fieldType("value", merged.AddlProps)
 		if nested != nil {
 			g.emitSchema(b, nested[0].(string), nested[1].(*Schema))
 		}
@@ -361,10 +353,10 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	}
 
 	// oneOf -> oneof block
-	if len(s.OneOf) > 0 {
+	if len(merged.OneOf) > 0 {
 		b.WriteString("  oneof one_of {\n")
 		idx := 0
-		for _, branch := range s.OneOf {
+		for _, branch := range merged.OneOf {
 			idx++
 			pt, nested := g.fieldType(fmt.Sprintf("choice_%d", idx), branch)
 			if nested != nil {
@@ -381,9 +373,9 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 		b.WriteString("  }\n")
 	}
 	// anyOf handling
-	if len(s.AnyOf) > 0 {
+	if len(merged.AnyOf) > 0 {
 		if g.anyOfMode == "repeat" {
-			pt, nested := g.fieldType("anyof_value", s.AnyOf[0])
+			pt, nested := g.fieldType("anyof_value", merged.AnyOf[0])
 			if nested != nil {
 				baseNestedName := nested[0].(string)
 				flatName := normalizeMessage(msgName + "_" + baseNestedName)
@@ -397,7 +389,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 		} else {
 			b.WriteString("  oneof any_of {\n")
 			idx := 0
-			for _, branch := range s.AnyOf {
+			for _, branch := range merged.AnyOf {
 				idx++
 				pt, nested := g.fieldType(fmt.Sprintf("alt_%d", idx), branch)
 				if nested != nil {
@@ -422,14 +414,84 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 	}
 }
 
-func mergeInto(base *Schema, add *Schema) *Schema {
-	if base.Properties == nil {
-		base.Properties = map[string]*Schema{}
+// flattenAllOf expands OpenAPI allOf by recursively merging referenced/object schemas.
+// Precedence: later parts override earlier ones on key conflicts.
+func (g *genContext) flattenAllOf(s *Schema) *Schema {
+	if s == nil {
+		return &Schema{Properties: map[string]*Schema{}}
 	}
-	for k, v := range add.Properties {
-		base.Properties[k] = v
+	s = g.resolveRef(s)
+	// Start with a shallow copy to preserve direct fields
+	out := &Schema{
+		Type:        s.Type,
+		Format:      s.Format,
+		Enum:        append([]string(nil), s.Enum...),
+		Properties:  map[string]*Schema{},
+		Items:       s.Items,
+		OneOf:       s.OneOf,
+		AllOf:       nil, // will be flattened
+		AnyOf:       s.AnyOf,
+		Required:    append([]string(nil), s.Required...),
+		Nullable:    s.Nullable,
+		AddlProps:   s.AddlProps,
+		Description: s.Description,
 	}
-	return base
+	// Merge parts from allOf first (inheritance base first, then extensions)
+	for _, part := range s.AllOf {
+		g.mergeSchema(out, g.flattenAllOf(part))
+	}
+	// Then merge direct properties/fields from s itself (extension)
+	for k, v := range s.Properties {
+		out.Properties[k] = v
+	}
+	// Ensure object type when properties exist
+	if out.Type == "" && (len(out.Properties) > 0 || out.AddlProps != nil || len(out.OneOf) > 0 || len(out.AnyOf) > 0) {
+		out.Type = "object"
+	}
+	// Dedup required
+	if len(out.Required) > 1 {
+		out.Required = uniqStrings(out.Required)
+	}
+	return out
+}
+
+// mergeSchema merges src into dst. Later values override earlier ones for property keys.
+func (g *genContext) mergeSchema(dst *Schema, src *Schema) {
+	if dst == nil || src == nil {
+		return
+	}
+	src = g.resolveRef(src)
+	if dst.Properties == nil {
+		dst.Properties = map[string]*Schema{}
+	}
+	for k, v := range src.Properties {
+		dst.Properties[k] = v
+	}
+	// Union required
+	if len(src.Required) > 0 {
+		dst.Required = append(dst.Required, src.Required...)
+	}
+	// Prefer non-nil additionalProperties
+	if src.AddlProps != nil {
+		dst.AddlProps = src.AddlProps
+	}
+	// If type not set on dst, adopt src type (useful when allOf only provides type)
+	if dst.Type == "" && src.Type != "" {
+		dst.Type = src.Type
+	}
+}
+
+func uniqStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
