@@ -495,8 +495,20 @@ func uniqStrings(in []string) []string {
 }
 
 func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
+	rawRef := ""
+	if s != nil {
+		rawRef = s.Ref
+	}
 	s = g.resolveRef(s)
 	if len(s.Enum) > 0 {
+		// If this enum is a $ref to a named schema, use the global name directly
+		if rawRef != "" {
+			if key := refKeyToName(rawRef); key != "" {
+				if _, ok := g.doc.Components.Schemas[key]; ok {
+					return normalizeMessage(key), nil
+				}
+			}
+		}
 		return normalizeMessage(name), []any{normalizeMessage(name), s}
 	}
 	switch s.Type {
@@ -505,11 +517,20 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 			return "bytes", nil
 		}
 		return "string", nil
+	case "int":
+		// Non-standard but seen in the wild; default to 64-bit
+		return "int64", nil
+	case "long":
+		return "int64", nil
 	case "integer":
 		if s.Format == "int32" {
 			return "int32", nil
 		}
 		return "int64", nil
+	case "float":
+		return "float", nil
+	case "double":
+		return "double", nil
 	case "number":
 		if s.Format == "float" {
 			return "float", nil
@@ -534,13 +555,48 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 			}
 			return fmt.Sprintf("map<string,%s>", vt), nil
 		}
+		// Prefer referenced name if this object came from a $ref
+		if rawRef != "" {
+			if key := refKeyToName(rawRef); key != "" {
+				if _, ok := g.doc.Components.Schemas[key]; ok {
+					return normalizeMessage(key), nil
+				}
+			}
+		}
 		return normalizeMessage(name), []any{normalizeMessage(name), s}
 	default:
 		if s.OneOf != nil || s.AllOf != nil || s.AnyOf != nil {
+			// If this is a composition by $ref, use the referenced name
+			if rawRef != "" {
+				if key := refKeyToName(rawRef); key != "" {
+					if _, ok := g.doc.Components.Schemas[key]; ok {
+						return normalizeMessage(key), nil
+					}
+				}
+			}
 			return normalizeMessage(name), []any{normalizeMessage(name), s}
 		}
 	}
 	return "string", nil
+}
+
+// refKeyToName extracts the schema key from a $ref like '#/components/schemas/Name' or '#Name'.
+func refKeyToName(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	if i := strings.Index(ref, "#"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	ref = strings.TrimPrefix(ref, "/")
+	if ref == "" {
+		return ""
+	}
+	parts := strings.Split(ref, "/")
+	key := parts[len(parts)-1]
+	key = strings.ReplaceAll(key, "~1", "/")
+	key = strings.ReplaceAll(key, "~0", "~")
+	return key
 }
 
 func (g *genContext) scalarType(s *Schema) string {
@@ -548,11 +604,19 @@ func (g *genContext) scalarType(s *Schema) string {
 	switch s.Type {
 	case "string":
 		return "string"
+	case "int":
+		return "int64"
+	case "long":
+		return "int64"
 	case "integer":
 		if s.Format == "int32" {
 			return "int32"
 		}
 		return "int64"
+	case "float":
+		return "float"
+	case "double":
+		return "double"
 	case "number":
 		if s.Format == "float" {
 			return "float"
@@ -571,12 +635,29 @@ func (g *genContext) resolveRef(s *Schema) *Schema {
 	if s.Ref == "" {
 		return s
 	}
-	// expecting '#/components/schemas/Name'
-	parts := strings.Split(s.Ref, "/")
-	if len(parts) > 0 {
+	// Support fragments like '#/components/schemas/Name', '#/definitions/Name', and '#Name'
+	ref := s.Ref
+	// Strip URL part before '#'
+	if i := strings.Index(ref, "#"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	ref = strings.TrimPrefix(ref, "/")
+	if ref != "" {
+		parts := strings.Split(ref, "/")
 		key := parts[len(parts)-1]
-		if tgt, ok := g.doc.Components.Schemas[key]; ok {
-			return tgt
+		if key != "" {
+			// Unescape JSON Pointer tokens
+			key = strings.ReplaceAll(key, "~1", "/")
+			key = strings.ReplaceAll(key, "~0", "~")
+			if tgt, ok := g.doc.Components.Schemas[key]; ok {
+				return tgt
+			}
+		}
+		// Fallback: if there are no '/', treat entire ref as key (e.g., '#Name')
+		if len(parts) == 1 {
+			if tgt, ok := g.doc.Components.Schemas[ref]; ok {
+				return tgt
+			}
 		}
 	}
 	return s

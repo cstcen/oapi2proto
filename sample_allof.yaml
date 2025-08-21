@@ -1,0 +1,25 @@
+openapi: 3.0.0
+info:
+  title: allof-case
+  version: 1.0.0
+components:
+  schemas:
+    BaseResult:
+      type: object
+      properties:
+        code:
+          type: int
+        message:
+          type: string
+    XData:
+      type: object
+      properties:
+        value:
+          type: string
+    TextResponse:
+      allOf:
+        - $ref: '#BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#XData'

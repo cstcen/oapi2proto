@@ -1,0 +1,19 @@
+syntax = "proto3";
+package test.v1;
+option go_package = "example.com/test;test";
+
+message BaseResult {
+  int64 code = 1;
+  string message = 2;
+}
+
+message TextResponse {
+  int64 code = 1;
+  XData data = 2;
+  string message = 3;
+}
+
+message XData {
+  string value = 1;
+}
+
