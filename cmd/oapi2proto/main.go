@@ -46,6 +46,7 @@ func main() {
 	useOptional := flag.Bool("use-optional", true, "为 nullable 标量生成 optional")
 	anyOfMode := flag.String("anyof", "oneof", "anyof 处理: oneof|repeat")
 	sortFields := flag.Bool("sort", true, "按字母排序 schema 与字段以获得稳定结果")
+	preserveNames := flag.Bool("preserve-names", false, "保留 schema 名称作为 proto 类型名 (不进行驼峰化)")
 	parallel := flag.Int("parallel", 0, "并行文件数量 (0=auto,1=串行)")
 	flag.Parse()
 
@@ -56,7 +57,7 @@ func main() {
 
 	// 单文件行为维持原样
 	if !info.IsDir() {
-		if err := generateForFile(*in, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields); err != nil {
+		if err := generateForFile(*in, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames); err != nil {
 			fatal(err)
 		}
 		return
@@ -88,7 +89,7 @@ func main() {
 	sort.Strings(files)
 
 	if combine {
-		if err := generateCombined(files, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields); err != nil {
+		if err := generateCombined(files, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames); err != nil {
 			fatal(err)
 		}
 		return
@@ -130,7 +131,7 @@ func main() {
 				base := filepath.Base(j.inFile)
 				base = strings.TrimSuffix(base, filepath.Ext(base))
 				outFile := filepath.Join(outDir, base+".proto")
-				rErr := generateForFile(j.inFile, outFile, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields)
+				rErr := generateForFile(j.inFile, outFile, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames)
 				results <- result{file: j.inFile, err: rErr}
 			}
 		}()
@@ -157,7 +158,7 @@ func main() {
 }
 
 // generateForFile 处理单个 openapi 文件 -> proto
-func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool) error {
+func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool) error {
 	data, err := os.ReadFile(inFile)
 	if err != nil {
 		return err
@@ -178,7 +179,7 @@ func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOf
 	if sortFields {
 		sort.Strings(names)
 	}
-	ctx := &genContext{doc: &doc, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, visited: map[string]bool{}}
+	ctx := &genContext{doc: &doc, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, visited: map[string]bool{}}
 	for _, name := range names {
 		ctx.emitSchema(&b, name, doc.Components.Schemas[name])
 	}
@@ -212,7 +213,7 @@ func parseDocument(data []byte) (Document, error) {
 }
 
 // generateCombined 聚合多个 openapi 文件为单一 proto，重复 schema 名只保留首次出现
-func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool) error {
+func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool) error {
 	combined := Document{}
 	combined.Components.Schemas = map[string]*Schema{}
 	overridden := 0
@@ -250,7 +251,7 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 	if sortFields {
 		sort.Strings(names)
 	}
-	ctx := &genContext{doc: &combined, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, visited: map[string]bool{}}
+	ctx := &genContext{doc: &combined, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, visited: map[string]bool{}}
 	for _, n := range names {
 		ctx.emitSchema(&b, n, combined.Components.Schemas[n])
 	}
@@ -261,11 +262,12 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 }
 
 type genContext struct {
-	doc         *Document
-	useOptional bool
-	anyOfMode   string
-	sortFields  bool
-	visited     map[string]bool
+	doc           *Document
+	useOptional   bool
+	anyOfMode     string
+	sortFields    bool
+	preserveNames bool
+	visited       map[string]bool
 }
 
 func (g *genContext) emitSchema(b *strings.Builder, name string, s *Schema) {
@@ -284,11 +286,11 @@ func (g *genContext) emitSchema(b *strings.Builder, name string, s *Schema) {
 	}
 	// Primitive at top-level: wrap in message
 	b.WriteString(fmt.Sprintf("// Primitive schema %s promoted to wrapper message\n", name))
-	b.WriteString(fmt.Sprintf("message %s { %s value = 1; }\n\n", normalizeMessage(name), g.scalarType(resolved)))
+	b.WriteString(fmt.Sprintf("message %s { %s value = 1; }\n\n", g.msgName(name), g.scalarType(resolved)))
 }
 
 func (g *genContext) emitEnum(b *strings.Builder, name string, s *Schema) {
-	enumName := normalizeMessage(name)
+	enumName := g.msgName(name)
 	b.WriteString(fmt.Sprintf("enum %s {\n", enumName))
 	b.WriteString(fmt.Sprintf("  %s_UNSPECIFIED = 0;\n", strings.ToUpper(enumName)))
 	for i, v := range s.Enum {
@@ -298,7 +300,7 @@ func (g *genContext) emitEnum(b *strings.Builder, name string, s *Schema) {
 }
 
 func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
-	msgName := normalizeMessage(name)
+	msgName := g.msgName(name)
 	b.WriteString(fmt.Sprintf("message %s {\n", msgName))
 	// Expand/flatten allOf semantics (inheritance/aggregation)
 	merged := g.flattenAllOf(s)
@@ -323,7 +325,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 		ptype, nested := g.fieldType(prop, ps)
 		if nested != nil { // defer emission for flatten, rename with parent prefix
 			baseNestedName := nested[0].(string)
-			flatName := normalizeMessage(msgName + "_" + baseNestedName)
+			flatName := g.msgName(msgName + "_" + baseNestedName)
 			// Preserve qualifiers like "repeated" or "map<...>" by replacing only the nested type token
 			ptype = strings.ReplaceAll(ptype, baseNestedName, flatName)
 			// schedule emission if not visited yet under new name
@@ -361,7 +363,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 			pt, nested := g.fieldType(fmt.Sprintf("choice_%d", idx), branch)
 			if nested != nil {
 				baseNestedName := nested[0].(string)
-				flatName := normalizeMessage(msgName + "_" + baseNestedName)
+				flatName := g.msgName(msgName + "_" + baseNestedName)
 				pt = strings.ReplaceAll(pt, baseNestedName, flatName)
 				if !g.visited[flatName] {
 					toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
@@ -378,7 +380,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 			pt, nested := g.fieldType("anyof_value", merged.AnyOf[0])
 			if nested != nil {
 				baseNestedName := nested[0].(string)
-				flatName := normalizeMessage(msgName + "_" + baseNestedName)
+				flatName := g.msgName(msgName + "_" + baseNestedName)
 				pt = strings.ReplaceAll(pt, baseNestedName, flatName)
 				if !g.visited[flatName] {
 					toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
@@ -394,7 +396,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 				pt, nested := g.fieldType(fmt.Sprintf("alt_%d", idx), branch)
 				if nested != nil {
 					baseNestedName := nested[0].(string)
-					flatName := normalizeMessage(msgName + "_" + baseNestedName)
+					flatName := g.msgName(msgName + "_" + baseNestedName)
 					pt = strings.ReplaceAll(pt, baseNestedName, flatName)
 					if !g.visited[flatName] {
 						toEmit = append(toEmit, pending{name: flatName, schema: nested[1].(*Schema)})
@@ -505,11 +507,11 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 		if rawRef != "" {
 			if key := refKeyToName(rawRef); key != "" {
 				if _, ok := g.doc.Components.Schemas[key]; ok {
-					return normalizeMessage(key), nil
+					return g.msgName(key), nil
 				}
 			}
 		}
-		return normalizeMessage(name), []any{normalizeMessage(name), s}
+		return g.msgName(name), []any{g.msgName(name), s}
 	}
 	switch s.Type {
 	case "string":
@@ -559,22 +561,22 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 		if rawRef != "" {
 			if key := refKeyToName(rawRef); key != "" {
 				if _, ok := g.doc.Components.Schemas[key]; ok {
-					return normalizeMessage(key), nil
+					return g.msgName(key), nil
 				}
 			}
 		}
-		return normalizeMessage(name), []any{normalizeMessage(name), s}
+		return g.msgName(name), []any{g.msgName(name), s}
 	default:
 		if s.OneOf != nil || s.AllOf != nil || s.AnyOf != nil {
 			// If this is a composition by $ref, use the referenced name
 			if rawRef != "" {
 				if key := refKeyToName(rawRef); key != "" {
 					if _, ok := g.doc.Components.Schemas[key]; ok {
-						return normalizeMessage(key), nil
+						return g.msgName(key), nil
 					}
 				}
 			}
-			return normalizeMessage(name), []any{normalizeMessage(name), s}
+			return g.msgName(name), []any{g.msgName(name), s}
 		}
 	}
 	return "string", nil
@@ -670,6 +672,16 @@ func normalizeMessage(name string) string {
 func normalizeField(name string) string {
 	name = nonAlnumReplace(name)
 	return lowerSnake(name)
+}
+
+// msgName returns the proto message/enum type name. If preserveNames is true,
+// it keeps the original schema name (only replacing illegal chars with underscores),
+// otherwise it applies UpperCamel casing like normalizeMessage.
+func (g *genContext) msgName(name string) string {
+	if g.preserveNames {
+		return nonAlnumReplace(name)
+	}
+	return normalizeMessage(name)
 }
 
 func nonAlnumReplace(s string) string {
