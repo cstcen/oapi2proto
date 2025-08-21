@@ -513,7 +513,16 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 		}
 		return g.msgName(name), []any{g.msgName(name), s}
 	}
-	switch s.Type {
+	// Derive effective type: some schemas omit 'type: object' but provide properties
+	effType := s.Type
+	if effType == "" {
+		if len(s.Properties) > 0 || s.AddlProps != nil || s.OneOf != nil || s.AllOf != nil || s.AnyOf != nil {
+			effType = "object"
+		} else if s.Items != nil {
+			effType = "array"
+		}
+	}
+	switch effType {
 	case "string":
 		if s.Format == "byte" || s.Format == "binary" {
 			return "bytes", nil

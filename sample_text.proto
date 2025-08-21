@@ -1,0 +1,34 @@
+syntax = "proto3";
+package test.v1;
+option go_package = "example.com/test;test";
+
+message DataResult {
+  int64 code = 1;
+  string message = 2;
+}
+
+message TextResponse {
+  int64 code = 1;
+  TextResponse_allOf_data data = 2;
+  string message = 3;
+}
+
+message TextResponse_allOf {
+  TextResponse_allOf_data data = 1;
+}
+
+message TextResponse_allOf_data {
+  string filtered_text = 1; // 如果被检测文本命中了自定义屏蔽词词库中的屏蔽词，则会返回当前字段，并将命中的屏蔽词替换为星号(*)。
+  repeated string keywords = 2; // 该字段用户返回当前命中的多个关键词，此字段可能返回null，表示取不到有效值
+  TextResponse_allOf_data_Label label = 3; // Normal: 正常 Porn: 色情 Abuse: 谩骂 Ad: 广告 Custom: 自定义
+}
+
+enum TextResponse_allOf_data_Label {
+  TEXTRESPONSE_ALLOF_DATA_LABEL_UNSPECIFIED = 0;
+  TEXTRESPONSE_ALLOF_DATA_LABEL_NORMAL = 1;
+  TEXTRESPONSE_ALLOF_DATA_LABEL_PORN = 2;
+  TEXTRESPONSE_ALLOF_DATA_LABEL_ABUSE = 3;
+  TEXTRESPONSE_ALLOF_DATA_LABEL_AD = 4;
+  TEXTRESPONSE_ALLOF_DATA_LABEL_CUSTOM = 5;
+}
+
