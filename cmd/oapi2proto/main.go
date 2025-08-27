@@ -399,12 +399,8 @@ func (g *genContext) emitSchema(b *strings.Builder, name string, s *Schema) {
 	g.visited[name] = true
 	resolved := g.resolveRef(s)
 	if len(resolved.Enum) > 0 {
-		// Do not generate enums for string enums; treat them as plain string
-		if !(resolved.Type == "string") {
-			g.emitEnum(b, name, resolved)
-			return
-		}
-		// fall through to primitive wrapper generation
+		// Do not generate enums at all; treat as underlying scalar type
+		// fall through to primitive wrapper generation or object handling
 	}
 	if resolved.Type == "object" || resolved.Properties != nil || resolved.AllOf != nil || resolved.OneOf != nil || resolved.AnyOf != nil || resolved.AddlProps != nil {
 		g.emitMessage(b, name, resolved)
@@ -642,20 +638,9 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 		rawRef = s.Ref
 	}
 	s = g.resolveRef(s)
-	// String enums are treated as plain string
-	if s.Type == "string" && len(s.Enum) > 0 {
-		return "string", nil
-	}
+	// Any enums are treated as their underlying scalar proto type
 	if len(s.Enum) > 0 {
-		// If this enum is a $ref to a named schema, use the global name directly
-		if rawRef != "" {
-			if key := refKeyToName(rawRef); key != "" {
-				if _, ok := g.doc.Components.Schemas[key]; ok {
-					return g.msgName(key), nil
-				}
-			}
-		}
-		return g.msgName(name), []any{g.msgName(name), s}
+		return g.scalarType(s), nil
 	}
 	// Derive effective type: some schemas omit 'type: object' but provide properties
 	effType := s.Type

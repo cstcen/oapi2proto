@@ -1,0 +1,22 @@
+openapi: 3.0.0
+info:
+  title: EnumTest
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Kind:
+      type: integer
+      enum: [0,1,2]
+    Product:
+      type: object
+      properties:
+        color:
+          type: string
+          enum: [red, green, blue]
+        mode:
+          type: integer
+          enum: [0,1,2]
+        ratio:
+          type: number
+          enum: [0.1, 0.5, 1.0]
