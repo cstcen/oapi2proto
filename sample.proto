@@ -1,16 +1,12 @@
 syntax = "proto3";
 package test.v1;
-option go_package = "example.com/test;test";
-
+option go_package = "example.com/test";
 message Pet {
   int64 id = 1;
   string name = 2;
 }
 
-enum Status {
-  STATUS_UNSPECIFIED = 0;
-  STATUS_AVAILABLE = 1;
-  STATUS_PENDING = 2;
-  STATUS_SOLD = 3;
-}
+// Primitive schema Status promoted to wrapper message
+message Status { string value = 1; }
+
 

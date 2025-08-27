@@ -23,19 +23,64 @@ type Document struct {
 }
 
 type Schema struct {
-	Ref         string             `json:"$ref" yaml:"$ref"`
-	Type        string             `json:"type" yaml:"type"`
-	Format      string             `json:"format" yaml:"format"`
-	Enum        []string           `json:"enum" yaml:"enum"`
-	Properties  map[string]*Schema `json:"properties" yaml:"properties"`
-	Items       *Schema            `json:"items" yaml:"items"`
-	OneOf       []*Schema          `json:"oneOf" yaml:"oneOf"`
-	AllOf       []*Schema          `json:"allOf" yaml:"allOf"`
-	AnyOf       []*Schema          `json:"anyOf" yaml:"anyOf"`
-	Required    []string           `json:"required" yaml:"required"`
-	Nullable    bool               `json:"nullable" yaml:"nullable"`
-	AddlProps   *Schema            `json:"additionalProperties" yaml:"additionalProperties"`
-	Description string             `json:"description" yaml:"description"`
+	Ref         string                `json:"$ref" yaml:"$ref"`
+	Type        string                `json:"type" yaml:"type"`
+	Format      string                `json:"format" yaml:"format"`
+	Enum        []string              `json:"enum" yaml:"enum"`
+	Properties  map[string]*Schema    `json:"properties" yaml:"properties"`
+	Items       *Schema               `json:"items" yaml:"items"`
+	OneOf       []*Schema             `json:"oneOf" yaml:"oneOf"`
+	AllOf       []*Schema             `json:"allOf" yaml:"allOf"`
+	AnyOf       []*Schema             `json:"anyOf" yaml:"anyOf"`
+	Required    []string              `json:"required" yaml:"required"`
+	Nullable    bool                  `json:"nullable" yaml:"nullable"`
+	AddlProps   *AdditionalProperties `json:"additionalProperties" yaml:"additionalProperties"`
+	Description string                `json:"description" yaml:"description"`
+}
+
+// AdditionalProperties can be a schema object or a boolean (true/false)
+type AdditionalProperties struct {
+	Schema *Schema
+	Bool   *bool
+}
+
+// UnmarshalYAML implements yaml unmarshaling for AdditionalProperties
+func (a *AdditionalProperties) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var b bool
+		if err := value.Decode(&b); err != nil {
+			return err
+		}
+		a.Bool = &b
+		return nil
+	case yaml.MappingNode:
+		var s Schema
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		a.Schema = &s
+		return nil
+	default:
+		return nil
+	}
+}
+
+// UnmarshalJSON implements json unmarshaling for AdditionalProperties
+func (a *AdditionalProperties) UnmarshalJSON(data []byte) error {
+	// try boolean first
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		a.Bool = &b
+		return nil
+	}
+	// then schema
+	var s Schema
+	if err := json.Unmarshal(data, &s); err == nil {
+		a.Schema = &s
+		return nil
+	}
+	return nil
 }
 
 func main() {
@@ -47,6 +92,7 @@ func main() {
 	anyOfMode := flag.String("anyof", "oneof", "anyof 处理: oneof|repeat")
 	sortFields := flag.Bool("sort", true, "按字母排序 schema 与字段以获得稳定结果")
 	preserveNames := flag.Bool("preserve-names", false, "保留 schema 名称作为 proto 类型名 (不进行驼峰化)")
+	freeform := flag.String("freeform", "value", "additionalProperties: true 的值类型: string|value|any (默认 value=google.protobuf.Value)")
 	parallel := flag.Int("parallel", 0, "并行文件数量 (0=auto,1=串行)")
 	flag.Parse()
 
@@ -57,7 +103,7 @@ func main() {
 
 	// 单文件行为维持原样
 	if !info.IsDir() {
-		if err := generateForFile(*in, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames); err != nil {
+		if err := generateForFile(*in, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames, *freeform); err != nil {
 			fatal(err)
 		}
 		return
@@ -89,7 +135,7 @@ func main() {
 	sort.Strings(files)
 
 	if combine {
-		if err := generateCombined(files, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames); err != nil {
+		if err := generateCombined(files, *out, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames, *freeform); err != nil {
 			fatal(err)
 		}
 		return
@@ -131,7 +177,7 @@ func main() {
 				base := filepath.Base(j.inFile)
 				base = strings.TrimSuffix(base, filepath.Ext(base))
 				outFile := filepath.Join(outDir, base+".proto")
-				rErr := generateForFile(j.inFile, outFile, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames)
+				rErr := generateForFile(j.inFile, outFile, *pkg, *goPkg, *useOptional, *anyOfMode, *sortFields, *preserveNames, *freeform)
 				results <- result{file: j.inFile, err: rErr}
 			}
 		}()
@@ -158,7 +204,7 @@ func main() {
 }
 
 // generateForFile 处理单个 openapi 文件 -> proto
-func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool) error {
+func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool, freeform string) error {
 	data, err := os.ReadFile(inFile)
 	if err != nil {
 		return err
@@ -170,7 +216,7 @@ func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOf
 	var b strings.Builder
 	b.WriteString("syntax = \"proto3\";\n")
 	b.WriteString(fmt.Sprintf("package %s;\n", pkg))
-	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n\n", goPkg))
+	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n", goPkg))
 
 	names := make([]string, 0, len(doc.Components.Schemas))
 	for name := range doc.Components.Schemas {
@@ -179,9 +225,47 @@ func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOf
 	if sortFields {
 		sort.Strings(names)
 	}
-	ctx := &genContext{doc: &doc, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, visited: map[string]bool{}}
+	ctx := &genContext{doc: &doc, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, freeform: freeform, visited: map[string]bool{}, imports: map[string]bool{}}
 	for _, name := range names {
 		ctx.emitSchema(&b, name, doc.Components.Schemas[name])
+	}
+	// emit imports if needed
+	if len(ctx.imports) > 0 {
+		var imps []string
+		for p := range ctx.imports {
+			imps = append(imps, p)
+		}
+		sort.Strings(imps)
+		var ib strings.Builder
+		for _, p := range imps {
+			ib.WriteString(fmt.Sprintf("import \"%s\";\n", p))
+		}
+		content := b.String()
+		insertAt := -1
+		if idx := strings.Index(content, "option go_package"); idx >= 0 {
+			if end := strings.Index(content[idx:], "\n"); end >= 0 {
+				insertAt = idx + end + 1
+			}
+		}
+		if insertAt == -1 {
+			// after package line
+			// find first two newlines (syntax line and package line)
+			first := strings.Index(content, "\n")
+			if first >= 0 {
+				secondRel := strings.Index(content[first+1:], "\n")
+				if secondRel >= 0 {
+					insertAt = first + 1 + secondRel + 1
+				}
+			}
+		}
+		if insertAt == -1 {
+			insertAt = len(content)
+		}
+		output := content[:insertAt] + ib.String() + content[insertAt:]
+		b.Reset()
+		b.WriteString(output)
+	} else {
+		b.WriteString("\n")
 	}
 	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
 		return err
@@ -213,7 +297,7 @@ func parseDocument(data []byte) (Document, error) {
 }
 
 // generateCombined 聚合多个 openapi 文件为单一 proto，重复 schema 名只保留首次出现
-func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool) error {
+func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool, freeform string) error {
 	combined := Document{}
 	combined.Components.Schemas = map[string]*Schema{}
 	overridden := 0
@@ -240,7 +324,7 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 	var b strings.Builder
 	b.WriteString("syntax = \"proto3\";\n")
 	b.WriteString(fmt.Sprintf("package %s;\n", pkg))
-	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n\n", goPkg))
+	b.WriteString(fmt.Sprintf("option go_package = \"%s\";\n", goPkg))
 	if overridden > 0 {
 		b.WriteString(fmt.Sprintf("// 注意: 有 %d 个重复 schema 名被后续文件覆盖 (采用最后出现版本)\n\n", overridden))
 	}
@@ -251,9 +335,45 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 	if sortFields {
 		sort.Strings(names)
 	}
-	ctx := &genContext{doc: &combined, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, visited: map[string]bool{}}
+	ctx := &genContext{doc: &combined, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, freeform: freeform, visited: map[string]bool{}, imports: map[string]bool{}}
 	for _, n := range names {
 		ctx.emitSchema(&b, n, combined.Components.Schemas[n])
+	}
+	// emit imports if needed
+	if len(ctx.imports) > 0 {
+		var imps []string
+		for p := range ctx.imports {
+			imps = append(imps, p)
+		}
+		sort.Strings(imps)
+		var ib strings.Builder
+		for _, p := range imps {
+			ib.WriteString(fmt.Sprintf("import \"%s\";\n", p))
+		}
+		content := b.String()
+		insertAt := -1
+		if idx := strings.Index(content, "option go_package"); idx >= 0 {
+			if end := strings.Index(content[idx:], "\n"); end >= 0 {
+				insertAt = idx + end + 1
+			}
+		}
+		if insertAt == -1 {
+			first := strings.Index(content, "\n")
+			if first >= 0 {
+				secondRel := strings.Index(content[first+1:], "\n")
+				if secondRel >= 0 {
+					insertAt = first + 1 + secondRel + 1
+				}
+			}
+		}
+		if insertAt == -1 {
+			insertAt = len(content)
+		}
+		output := content[:insertAt] + ib.String() + content[insertAt:]
+		b.Reset()
+		b.WriteString(output)
+	} else {
+		b.WriteString("\n")
 	}
 	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
 		return err
@@ -267,7 +387,9 @@ type genContext struct {
 	anyOfMode     string
 	sortFields    bool
 	preserveNames bool
+	freeform      string
 	visited       map[string]bool
+	imports       map[string]bool
 }
 
 func (g *genContext) emitSchema(b *strings.Builder, name string, s *Schema) {
@@ -277,8 +399,12 @@ func (g *genContext) emitSchema(b *strings.Builder, name string, s *Schema) {
 	g.visited[name] = true
 	resolved := g.resolveRef(s)
 	if len(resolved.Enum) > 0 {
-		g.emitEnum(b, name, resolved)
-		return
+		// Do not generate enums for string enums; treat them as plain string
+		if !(resolved.Type == "string") {
+			g.emitEnum(b, name, resolved)
+			return
+		}
+		// fall through to primitive wrapper generation
 	}
 	if resolved.Type == "object" || resolved.Properties != nil || resolved.AllOf != nil || resolved.OneOf != nil || resolved.AnyOf != nil || resolved.AddlProps != nil {
 		g.emitMessage(b, name, resolved)
@@ -347,11 +473,25 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 
 	// map type
 	if merged.AddlProps != nil && len(merged.Properties) == 0 {
-		valType, nested := g.fieldType("value", merged.AddlProps)
-		if nested != nil {
-			g.emitSchema(b, nested[0].(string), nested[1].(*Schema))
+		if merged.AddlProps.Schema != nil {
+			valType, nested := g.fieldType("value", merged.AddlProps.Schema)
+			if nested != nil {
+				g.emitSchema(b, nested[0].(string), nested[1].(*Schema))
+			}
+			b.WriteString(fmt.Sprintf("  map<string,%s> entries = 1;\n", valType))
+		} else if merged.AddlProps.Bool != nil && *merged.AddlProps.Bool {
+			// Free-form object -> map value depends on freeform mode
+			switch g.freeform {
+			case "any":
+				g.imports["google/protobuf/any.proto"] = true
+				b.WriteString("  map<string,google.protobuf.Any> entries = 1;\n")
+			case "string":
+				b.WriteString("  map<string,string> entries = 1;\n")
+			default: // value
+				g.imports["google/protobuf/struct.proto"] = true
+				b.WriteString("  map<string,google.protobuf.Value> entries = 1;\n")
+			}
 		}
-		b.WriteString(fmt.Sprintf("  map<string,%s> entries = 1;\n", valType))
 	}
 
 	// oneOf -> oneof block
@@ -502,6 +642,10 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 		rawRef = s.Ref
 	}
 	s = g.resolveRef(s)
+	// String enums are treated as plain string
+	if s.Type == "string" && len(s.Enum) > 0 {
+		return "string", nil
+	}
 	if len(s.Enum) > 0 {
 		// If this enum is a $ref to a named schema, use the global name directly
 		if rawRef != "" {
@@ -560,11 +704,25 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 		return "repeated " + et, nil
 	case "object":
 		if len(s.Properties) == 0 && s.AddlProps != nil { // map
-			vt, nested := g.fieldType(name+"_value", s.AddlProps)
-			if nested != nil {
-				return fmt.Sprintf("map<string,%s>", nested[0].(string)), nested
+			if s.AddlProps.Schema != nil {
+				vt, nested := g.fieldType(name+"_value", s.AddlProps.Schema)
+				if nested != nil {
+					return fmt.Sprintf("map<string,%s>", nested[0].(string)), nested
+				}
+				return fmt.Sprintf("map<string,%s>", vt), nil
 			}
-			return fmt.Sprintf("map<string,%s>", vt), nil
+			if s.AddlProps.Bool != nil && *s.AddlProps.Bool {
+				switch g.freeform {
+				case "any":
+					g.imports["google/protobuf/any.proto"] = true
+					return "map<string,google.protobuf.Any>", nil
+				case "string":
+					return "map<string,string>", nil
+				default:
+					g.imports["google/protobuf/struct.proto"] = true
+					return "map<string,google.protobuf.Value>", nil
+				}
+			}
 		}
 		// Prefer referenced name if this object came from a $ref
 		if rawRef != "" {
