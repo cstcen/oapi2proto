@@ -709,6 +709,10 @@ func (g *genContext) fieldType(name string, s *Schema) (string, []any) {
 				}
 			}
 		}
+		// If this object schema composes via allOf, always embed as a nested type
+		if len(s.AllOf) > 0 {
+			return g.msgName(name), []any{g.msgName(name), s}
+		}
 		// Prefer referenced name if this object came from a $ref
 		if rawRef != "" {
 			if key := refKeyToName(rawRef); key != "" {

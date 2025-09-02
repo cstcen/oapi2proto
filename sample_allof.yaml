@@ -1,25 +1,35 @@
 openapi: 3.0.0
 info:
-  title: allof-case
+  title: AllOfTest
   version: 1.0.0
+paths: {}
 components:
   schemas:
-    BaseResult:
+    Base:
       type: object
       properties:
-        code:
-          type: int
-        message:
-          type: string
-    XData:
+        id:
+          type: integer
+          format: int64
+    DataA:
       type: object
       properties:
-        value:
+        a:
           type: string
-    TextResponse:
+    Combo:
       allOf:
-        - $ref: '#BaseResult'
+        - $ref: '#/components/schemas/Base'
+        - $ref: '#/components/schemas/DataA'
         - type: object
           properties:
-            data:
-              $ref: '#XData'
+            extra:
+              type: string
+    Holder:
+      type: object
+      properties:
+        combo:
+          $ref: '#/components/schemas/Combo'
+        combos:
+          type: array
+          items:
+            $ref: '#/components/schemas/Combo'

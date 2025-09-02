@@ -1,19 +1,35 @@
 syntax = "proto3";
 package test.v1;
-option go_package = "example.com/test;test";
-
-message BaseResult {
-  int64 code = 1;
-  string message = 2;
+option go_package = "example.com/test";
+message Base {
+  int64 id = 1;
 }
 
-message TextResponse {
-  int64 code = 1;
-  XData data = 2;
-  string message = 3;
+message Combo {
+  string a = 1;
+  string extra = 2;
+  int64 id = 3;
 }
 
-message XData {
-  string value = 1;
+message DataA {
+  string a = 1;
 }
+
+message Holder {
+  HolderCombo combo = 1;
+  repeated HolderCombosItem combos = 2;
+}
+
+message HolderCombo {
+  string a = 1;
+  string extra = 2;
+  int64 id = 3;
+}
+
+message HolderCombosItem {
+  string a = 1;
+  string extra = 2;
+  int64 id = 3;
+}
+
 
