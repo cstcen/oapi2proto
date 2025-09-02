@@ -1,0 +1,29 @@
+syntax = "proto3";
+package test.v1;
+option go_package = "example.com/test";
+message BaseResult {
+  int64 code = 1;
+  string message = 2;
+}
+
+message HeartbeatResponseData {
+  int64 ts = 1;
+}
+
+message LoginResponseData {
+  string token = 1;
+}
+
+message HeartbeatResponse {
+  int64 code = 1;
+  HeartbeatResponseData data = 2;
+  string message = 3;
+}
+
+message LoginResponse {
+  int64 code = 1;
+  LoginResponseData data = 2;
+  string message = 3;
+}
+
+

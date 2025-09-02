@@ -18,7 +18,8 @@ import (
 // Simplified OAS structures (minimal fields used)
 type Document struct {
 	Components struct {
-		Schemas map[string]*Schema `json:"schemas" yaml:"schemas"`
+		Schemas   map[string]*Schema   `json:"schemas" yaml:"schemas"`
+		Responses map[string]*Response `json:"responses" yaml:"responses"`
 	} `json:"components" yaml:"components"`
 }
 
@@ -36,6 +37,18 @@ type Schema struct {
 	Nullable    bool                  `json:"nullable" yaml:"nullable"`
 	AddlProps   *AdditionalProperties `json:"additionalProperties" yaml:"additionalProperties"`
 	Description string                `json:"description" yaml:"description"`
+}
+
+// Response represents OpenAPI Response object under components.responses
+type Response struct {
+	Ref         string                        `json:"$ref" yaml:"$ref"`
+	Description string                        `json:"description" yaml:"description"`
+	Content     map[string]*ResponseMediaType `json:"content" yaml:"content"`
+}
+
+// ResponseMediaType represents a media type entry with an associated schema
+type ResponseMediaType struct {
+	Schema *Schema `json:"schema" yaml:"schema"`
 }
 
 // AdditionalProperties can be a schema object or a boolean (true/false)
@@ -229,6 +242,37 @@ func generateForFile(inFile, outFile, pkg, goPkg string, useOptional bool, anyOf
 	for _, name := range names {
 		ctx.emitSchema(&b, name, doc.Components.Schemas[name])
 	}
+	// Emit component responses as messages too (prefer application/json schema)
+	if doc.Components.Responses != nil && len(doc.Components.Responses) > 0 {
+		rnames := make([]string, 0, len(doc.Components.Responses))
+		for rn := range doc.Components.Responses {
+			rnames = append(rnames, rn)
+		}
+		if sortFields {
+			sort.Strings(rnames)
+		}
+		for _, rn := range rnames {
+			r := resolveResponseRef(&doc, doc.Components.Responses[rn])
+			if r == nil || r.Content == nil {
+				continue
+			}
+			var sch *Schema
+			if mt, ok := r.Content["application/json"]; ok && mt != nil {
+				sch = mt.Schema
+			} else {
+				for _, mt := range r.Content {
+					if mt != nil && mt.Schema != nil {
+						sch = mt.Schema
+						break
+					}
+				}
+			}
+			if sch == nil {
+				continue
+			}
+			ctx.emitSchema(&b, rn, sch)
+		}
+	}
 	// emit imports if needed
 	if len(ctx.imports) > 0 {
 		var imps []string
@@ -284,14 +328,21 @@ func parseDocument(data []byte) (Document, error) {
 		jsonErr = jErr
 		var ydoc Document
 		yErr := yaml.Unmarshal(data, &ydoc)
-		if yErr == nil && len(ydoc.Components.Schemas) > 0 {
+		if yErr == nil { // accept YAML even if schemas are empty (responses-only)
 			doc = ydoc
 		} else if jsonErr != nil {
 			return Document{}, fmt.Errorf("parse openapi (json/yaml) failed: jsonErr=%v yamlErr=%v", jsonErr, yErr)
 		}
 	}
-	if len(doc.Components.Schemas) == 0 {
-		return Document{}, errors.New("no components.schemas found")
+	// Ensure non-nil maps
+	if doc.Components.Schemas == nil {
+		doc.Components.Schemas = map[string]*Schema{}
+	}
+	if doc.Components.Responses == nil {
+		doc.Components.Responses = map[string]*Response{}
+	}
+	if len(doc.Components.Schemas) == 0 && len(doc.Components.Responses) == 0 {
+		return Document{}, errors.New("no components.schemas or components.responses found")
 	}
 	return doc, nil
 }
@@ -300,6 +351,7 @@ func parseDocument(data []byte) (Document, error) {
 func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bool, anyOfMode string, sortFields bool, preserveNames bool, freeform string) error {
 	combined := Document{}
 	combined.Components.Schemas = map[string]*Schema{}
+	combined.Components.Responses = map[string]*Response{}
 	overridden := 0
 	for _, f := range files {
 		data, err := os.ReadFile(f)
@@ -317,9 +369,15 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 			}
 			combined.Components.Schemas[name] = schema // 后者覆盖前者
 		}
+		for name, resp := range doc.Components.Responses {
+			if _, exists := combined.Components.Responses[name]; exists {
+				overridden++
+			}
+			combined.Components.Responses[name] = resp
+		}
 	}
-	if len(combined.Components.Schemas) == 0 {
-		return errors.New("无有效 schema 可生成")
+	if len(combined.Components.Schemas) == 0 && len(combined.Components.Responses) == 0 {
+		return errors.New("无有效 schema/response 可生成")
 	}
 	var b strings.Builder
 	b.WriteString("syntax = \"proto3\";\n")
@@ -338,6 +396,37 @@ func generateCombined(files []string, outFile, pkg, goPkg string, useOptional bo
 	ctx := &genContext{doc: &combined, useOptional: useOptional, anyOfMode: anyOfMode, sortFields: sortFields, preserveNames: preserveNames, freeform: freeform, visited: map[string]bool{}, imports: map[string]bool{}}
 	for _, n := range names {
 		ctx.emitSchema(&b, n, combined.Components.Schemas[n])
+	}
+	// Emit responses
+	if len(combined.Components.Responses) > 0 {
+		rnames := make([]string, 0, len(combined.Components.Responses))
+		for n := range combined.Components.Responses {
+			rnames = append(rnames, n)
+		}
+		if sortFields {
+			sort.Strings(rnames)
+		}
+		for _, rn := range rnames {
+			r := resolveResponseRef(&combined, combined.Components.Responses[rn])
+			if r == nil || r.Content == nil {
+				continue
+			}
+			var sch *Schema
+			if mt, ok := r.Content["application/json"]; ok && mt != nil {
+				sch = mt.Schema
+			} else {
+				for _, mt := range r.Content {
+					if mt != nil && mt.Schema != nil {
+						sch = mt.Schema
+						break
+					}
+				}
+			}
+			if sch == nil {
+				continue
+			}
+			ctx.emitSchema(&b, rn, sch)
+		}
 	}
 	// emit imports if needed
 	if len(ctx.imports) > 0 {
@@ -819,6 +908,35 @@ func (g *genContext) resolveRef(s *Schema) *Schema {
 		}
 	}
 	return s
+}
+
+// resolveResponseRef resolves a components.responses $ref like '#/components/responses/Name' or '#Name'
+func resolveResponseRef(doc *Document, r *Response) *Response {
+	if r == nil || r.Ref == "" {
+		return r
+	}
+	ref := r.Ref
+	if i := strings.Index(ref, "#"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	ref = strings.TrimPrefix(ref, "/")
+	if ref == "" {
+		return r
+	}
+	parts := strings.Split(ref, "/")
+	key := parts[len(parts)-1]
+	key = strings.ReplaceAll(key, "~1", "/")
+	key = strings.ReplaceAll(key, "~0", "~")
+	if tgt, ok := doc.Components.Responses[key]; ok {
+		return tgt
+	}
+	// fallback: single-part key
+	if len(parts) == 1 {
+		if tgt, ok := doc.Components.Responses[ref]; ok {
+			return tgt
+		}
+	}
+	return r
 }
 
 func normalizeMessage(name string) string {
