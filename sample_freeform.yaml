@@ -1,9 +1,0 @@
-openapi: 3.0.0
-info:
-  title: freeform
-  version: 1.0.0
-components:
-  schemas:
-    FreeBody:
-      type: object
-      additionalProperties: true

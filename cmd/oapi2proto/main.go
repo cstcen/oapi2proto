@@ -663,13 +663,13 @@ func (g *genContext) flattenAllOf(s *Schema) *Schema {
 		AddlProps:   s.AddlProps,
 		Description: s.Description,
 	}
-	// Merge parts from allOf first (inheritance base first, then extensions)
-	for _, part := range s.AllOf {
-		g.mergeSchema(out, g.flattenAllOf(part))
-	}
-	// Then merge direct properties/fields from s itself (extension)
+	// 先合并自身属性
 	for k, v := range s.Properties {
 		out.Properties[k] = v
+	}
+	// 再合并所有 allOf
+	for _, part := range s.AllOf {
+		g.mergeSchema(out, g.flattenAllOf(part))
 	}
 	// Ensure object type when properties exist
 	if out.Type == "" && (len(out.Properties) > 0 || out.AddlProps != nil || len(out.OneOf) > 0 || len(out.AnyOf) > 0) {

@@ -1,9 +1,0 @@
-syntax = "proto3";
-package test.v1;
-option go_package = "example.com/test;test";
-message FreeBody {
-  map<string,google.protobuf.Value> entries = 1;
-}
-import "google/protobuf/struct.proto";
-
-
