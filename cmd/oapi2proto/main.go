@@ -939,29 +939,39 @@ func resolveResponseRef(doc *Document, r *Response) *Response {
 	return r
 }
 
+// normalizeMessage removes all non-letter characters and applies UpperCamel casing
 func normalizeMessage(name string) string {
-	name = nonAlnumReplace(name)
-	return upperCamel(name)
+	var out []rune
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			out = append(out, r)
+		}
+	}
+	return upperCamel(string(out))
 }
 func normalizeField(name string) string {
 	name = nonAlnumReplace(name)
 	return lowerSnake(name)
 }
 
+// msgName returns the proto message/enum type name. If preserveNames is true,
+// it keeps the original schema name (only replacing illegal chars with underscores),
+// otherwise it applies UpperCamel casing like normalizeMessage.
 func (g *genContext) msgName(name string) string {
-    // 只保留字母
-    var out []rune
-    for _, r := range name {
-        if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-            out = append(out, r)
-        }
-    }
-    if len(out) == 0 {
-        return "Message"
-    }
-    // 首字母大写
-    res := string(out)
-    return strings.ToUpper(res[:1]) + res[1:]
+	if g.preserveNames {
+		// Remove all non-letter characters for schema names
+		var out []rune
+		for _, r := range name {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				out = append(out, r)
+			}
+		}
+		if len(out) == 0 {
+			return "Message"
+		}
+		return string(out)
+	}
+	return normalizeMessage(name)
 }
 
 func nonAlnumReplace(s string) string {
@@ -1041,20 +1051,39 @@ func isScalar(t string) bool {
 
 func fatal(err error) { fmt.Fprintln(os.Stderr, "error:", err); os.Exit(1) }
 
+// sanitizeFieldName preserves the original property name while ensuring it's a valid proto identifier.
+// - If it starts with a digit, prefix with "f_".
+// - Replace illegal characters with '_'.
+// - Avoid empty names by falling back to "field".
 func sanitizeFieldName(s string) string {
-    s = strings.TrimSpace(s)
-    if s == "" {
-        return "field"
-    }
-    // 只保留字母
-    var out []rune
-    for _, r := range s {
-        if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-            out = append(out, r)
-        }
-    }
-    if len(out) == 0 {
-        return "field"
-    }
-    return string(out)
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "field"
+	}
+	// Replace invalid chars
+	var out []rune
+	for i, r := range s {
+		valid := (r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+		if i == 0 {
+			// First char cannot be a digit
+			if r >= '0' && r <= '9' {
+				out = append(out, 'f', '_', r)
+				continue
+			}
+		}
+		if valid {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	// Ensure first char is not digit (in case original started with '_'+digit only)
+	if len(out) > 0 && out[0] >= '0' && out[0] <= '9' {
+		out = append([]rune{'f', '_'}, out...)
+	}
+	res := string(out)
+	if strings.Trim(res, "_") == "" {
+		return "field"
+	}
+	return res
 }
