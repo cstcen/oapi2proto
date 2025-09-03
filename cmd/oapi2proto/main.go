@@ -897,13 +897,14 @@ func (g *genContext) resolveRef(s *Schema) *Schema {
 			key = strings.ReplaceAll(key, "~1", "/")
 			key = strings.ReplaceAll(key, "~0", "~")
 			if tgt, ok := g.doc.Components.Schemas[key]; ok {
-				return tgt
+				// 递归解析，直到没有 $ref
+				return g.resolveRef(tgt)
 			}
 		}
 		// Fallback: if there are no '/', treat entire ref as key (e.g., '#Name')
 		if len(parts) == 1 {
 			if tgt, ok := g.doc.Components.Schemas[ref]; ok {
-				return tgt
+				return g.resolveRef(tgt)
 			}
 		}
 	}
