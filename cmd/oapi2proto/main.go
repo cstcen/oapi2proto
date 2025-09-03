@@ -548,7 +548,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 		if ps.Nullable && g.useOptional && isScalar(ptype) {
 			opt = "optional "
 		}
-		b.WriteString(fmt.Sprintf("  %s%s %s = %d;", opt, ptype, normalizeField(prop), fieldNum))
+		b.WriteString(fmt.Sprintf("  %s%s %s = %d;", opt, ptype, sanitizeFieldName(prop), fieldNum))
 		if ps.Description != "" {
 			b.WriteString(fmt.Sprintf(" // %s", oneline(ps.Description)))
 		}
@@ -1034,3 +1034,40 @@ func isScalar(t string) bool {
 }
 
 func fatal(err error) { fmt.Fprintln(os.Stderr, "error:", err); os.Exit(1) }
+
+// sanitizeFieldName preserves the original property name while ensuring it's a valid proto identifier.
+// - If it starts with a digit, prefix with "f_".
+// - Replace illegal characters with '_'.
+// - Avoid empty names by falling back to "field".
+func sanitizeFieldName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "field"
+	}
+	// Replace invalid chars
+	var out []rune
+	for i, r := range s {
+		valid := (r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+		if i == 0 {
+			// First char cannot be a digit
+			if r >= '0' && r <= '9' {
+				out = append(out, 'f', '_', r)
+				continue
+			}
+		}
+		if valid {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	// Ensure first char is not digit (in case original started with '_'+digit only)
+	if len(out) > 0 && out[0] >= '0' && out[0] <= '9' {
+		out = append([]rune{'f', '_'}, out...)
+	}
+	res := string(out)
+	if strings.Trim(res, "_") == "" {
+		return "field"
+	}
+	return res
+}
