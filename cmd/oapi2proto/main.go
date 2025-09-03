@@ -939,11 +939,11 @@ func resolveResponseRef(doc *Document, r *Response) *Response {
 	return r
 }
 
-// normalizeMessage removes all non-letter characters and applies UpperCamel casing
+// normalizeMessage removes all non-alphanumeric characters and applies UpperCamel casing
 func normalizeMessage(name string) string {
 	var out []rune
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			out = append(out, r)
 		}
 	}
@@ -959,10 +959,10 @@ func normalizeField(name string) string {
 // otherwise it applies UpperCamel casing like normalizeMessage.
 func (g *genContext) msgName(name string) string {
 	if g.preserveNames {
-		// Remove all non-letter characters for schema names
+		// Remove all non-alphanumeric characters for schema names
 		var out []rune
 		for _, r := range name {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 				out = append(out, r)
 			}
 		}
