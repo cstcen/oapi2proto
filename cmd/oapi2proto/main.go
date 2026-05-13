@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,19 +25,20 @@ type Document struct {
 }
 
 type Schema struct {
-	Ref         string                `json:"$ref" yaml:"$ref"`
-	Type        string                `json:"type" yaml:"type"`
-	Format      string                `json:"format" yaml:"format"`
-	Enum        []string              `json:"enum" yaml:"enum"`
-	Properties  map[string]*Schema    `json:"properties" yaml:"properties"`
-	Items       *Schema               `json:"items" yaml:"items"`
-	OneOf       []*Schema             `json:"oneOf" yaml:"oneOf"`
-	AllOf       []*Schema             `json:"allOf" yaml:"allOf"`
-	AnyOf       []*Schema             `json:"anyOf" yaml:"anyOf"`
-	Required    []string              `json:"required" yaml:"required"`
-	Nullable    bool                  `json:"nullable" yaml:"nullable"`
-	AddlProps   *AdditionalProperties `json:"additionalProperties" yaml:"additionalProperties"`
-	Description string                `json:"description" yaml:"description"`
+	Ref           string                `json:"$ref" yaml:"$ref"`
+	Type          string                `json:"type" yaml:"type"`
+	Format        string                `json:"format" yaml:"format"`
+	Enum          []string              `json:"enum" yaml:"enum"`
+	Properties    map[string]*Schema    `json:"properties" yaml:"properties"`
+	PropertyOrder []string              `json:"-" yaml:"-"`
+	Items         *Schema               `json:"items" yaml:"items"`
+	OneOf         []*Schema             `json:"oneOf" yaml:"oneOf"`
+	AllOf         []*Schema             `json:"allOf" yaml:"allOf"`
+	AnyOf         []*Schema             `json:"anyOf" yaml:"anyOf"`
+	Required      []string              `json:"required" yaml:"required"`
+	Nullable      bool                  `json:"nullable" yaml:"nullable"`
+	AddlProps     *AdditionalProperties `json:"additionalProperties" yaml:"additionalProperties"`
+	Description   string                `json:"description" yaml:"description"`
 }
 
 // Response represents OpenAPI Response object under components.responses
@@ -55,6 +57,160 @@ type ResponseMediaType struct {
 type AdditionalProperties struct {
 	Schema *Schema
 	Bool   *bool
+}
+
+type schemaAlias Schema
+
+// UnmarshalJSON preserves the declaration order of properties.
+func (s *Schema) UnmarshalJSON(data []byte) error {
+	var decoded schemaAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*s = Schema(decoded)
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	rawProps, ok := raw["properties"]
+	if !ok {
+		return nil
+	}
+	props, order, err := decodeJSONProperties(rawProps)
+	if err != nil {
+		return err
+	}
+	s.Properties = props
+	s.PropertyOrder = order
+	return nil
+}
+
+// UnmarshalYAML preserves the declaration order of properties.
+func (s *Schema) UnmarshalYAML(value *yaml.Node) error {
+	var decoded schemaAlias
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*s = Schema(decoded)
+
+	if value.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		if value.Content[i].Value != "properties" {
+			continue
+		}
+		props, order, err := decodeYAMLProperties(value.Content[i+1])
+		if err != nil {
+			return err
+		}
+		s.Properties = props
+		s.PropertyOrder = order
+		break
+	}
+	return nil
+}
+
+func decodeJSONProperties(data []byte) (map[string]*Schema, []string, error) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return nil, nil, fmt.Errorf("properties must be an object")
+	}
+
+	props := make(map[string]*Schema)
+	order := make([]string, 0)
+	for dec.More() {
+		keyToken, err := dec.Token()
+		if err != nil {
+			return nil, nil, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, nil, fmt.Errorf("properties key must be a string")
+		}
+		var prop Schema
+		if err := dec.Decode(&prop); err != nil {
+			return nil, nil, err
+		}
+		props[key] = &prop
+		order = append(order, key)
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, err
+	}
+	return props, order, nil
+}
+
+func decodeYAMLProperties(node *yaml.Node) (map[string]*Schema, []string, error) {
+	if node.Kind == 0 || node.Tag == "!!null" {
+		return nil, nil, nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil, nil, fmt.Errorf("properties must be a mapping")
+	}
+
+	props := make(map[string]*Schema, len(node.Content)/2)
+	order := make([]string, 0, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		var prop Schema
+		if err := node.Content[i+1].Decode(&prop); err != nil {
+			return nil, nil, err
+		}
+		props[key] = &prop
+		order = append(order, key)
+	}
+	return props, order, nil
+}
+
+func (s *Schema) propertyNames() []string {
+	if len(s.Properties) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(s.Properties))
+	seen := make(map[string]struct{}, len(s.Properties))
+	for _, name := range s.PropertyOrder {
+		if _, ok := s.Properties[name]; !ok {
+			continue
+		}
+		names = append(names, name)
+		seen[name] = struct{}{}
+	}
+	if len(names) == len(s.Properties) {
+		return names
+	}
+
+	missing := make([]string, 0, len(s.Properties)-len(names))
+	for name := range s.Properties {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return append(names, missing...)
+}
+
+func (s *Schema) setProperty(name string, schema *Schema) {
+	if s.Properties == nil {
+		s.Properties = map[string]*Schema{}
+	}
+	if _, exists := s.Properties[name]; !exists {
+		s.PropertyOrder = append(s.PropertyOrder, name)
+	}
+	s.Properties[name] = schema
 }
 
 // UnmarshalYAML implements yaml unmarshaling for AdditionalProperties
@@ -103,7 +259,7 @@ func main() {
 	goPkg := flag.String("go_pkg", "example.com/project/api/v1;v1", "go_package option value")
 	useOptional := flag.Bool("use-optional", true, "为 nullable 标量生成 optional")
 	anyOfMode := flag.String("anyof", "oneof", "anyof 处理: oneof|repeat")
-	sortFields := flag.Bool("sort", true, "按字母排序 schema 与字段以获得稳定结果")
+	sortFields := flag.Bool("sort", true, "按字母排序 schema/response 名称；message 字段顺序跟随 OpenAPI properties")
 	preserveNames := flag.Bool("preserve-names", false, "保留 schema 名称作为 proto 类型名 (不进行驼峰化)")
 	freeform := flag.String("freeform", "value", "additionalProperties: true 的值类型: string|value|any (默认 value=google.protobuf.Value)")
 	parallel := flag.Int("parallel", 0, "并行文件数量 (0=auto,1=串行)")
@@ -518,13 +674,7 @@ func (g *genContext) emitMessage(b *strings.Builder, name string, s *Schema) {
 
 	// Track field numbers
 	fieldNum := 1
-	propNames := make([]string, 0, len(merged.Properties))
-	for k := range merged.Properties {
-		propNames = append(propNames, k)
-	}
-	if g.sortFields {
-		sort.Strings(propNames)
-	}
+	propNames := merged.propertyNames()
 	// Collect nested schemas to emit later (flatten)
 	type pending struct {
 		name   string
@@ -650,26 +800,27 @@ func (g *genContext) flattenAllOf(s *Schema) *Schema {
 	s = g.resolveRef(s)
 	// Start with a shallow copy to preserve direct fields
 	out := &Schema{
-		Type:        s.Type,
-		Format:      s.Format,
-		Enum:        append([]string(nil), s.Enum...),
-		Properties:  map[string]*Schema{},
-		Items:       s.Items,
-		OneOf:       s.OneOf,
-		AllOf:       nil, // will be flattened
-		AnyOf:       s.AnyOf,
-		Required:    append([]string(nil), s.Required...),
-		Nullable:    s.Nullable,
-		AddlProps:   s.AddlProps,
-		Description: s.Description,
+		Type:          s.Type,
+		Format:        s.Format,
+		Enum:          append([]string(nil), s.Enum...),
+		Properties:    map[string]*Schema{},
+		PropertyOrder: nil,
+		Items:         s.Items,
+		OneOf:         s.OneOf,
+		AllOf:         nil, // will be flattened
+		AnyOf:         s.AnyOf,
+		Required:      append([]string(nil), s.Required...),
+		Nullable:      s.Nullable,
+		AddlProps:     s.AddlProps,
+		Description:   s.Description,
 	}
 	// 先合并所有 allOf
 	for _, part := range s.AllOf {
 		g.mergeSchema(out, g.flattenAllOf(part))
 	}
 	// 再合并自身属性
-	for k, v := range s.Properties {
-		out.Properties[k] = v
+	for _, name := range s.propertyNames() {
+		out.setProperty(name, s.Properties[name])
 	}
 	// Ensure object type when properties exist
 	if out.Type == "" && (len(out.Properties) > 0 || out.AddlProps != nil || len(out.OneOf) > 0 || len(out.AnyOf) > 0) {
@@ -691,8 +842,8 @@ func (g *genContext) mergeSchema(dst *Schema, src *Schema) {
 	if dst.Properties == nil {
 		dst.Properties = map[string]*Schema{}
 	}
-	for k, v := range src.Properties {
-		dst.Properties[k] = v
+	for _, name := range src.propertyNames() {
+		dst.setProperty(name, src.Properties[name])
 	}
 	// Union required
 	if len(src.Required) > 0 {

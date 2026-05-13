@@ -1,0 +1,614 @@
+syntax = "proto3";
+package postbox.v1;
+option go_package = "example.com/postbox/api/v1;v1";
+import "google/protobuf/struct.proto";
+message AllTypeRecipients {
+  string channel = 1;
+  string market = 2;
+}
+
+message BaseResult {
+  int32 code = 1;
+  string message = 2;
+}
+
+message BaseServiceResponse {
+  int32 resultCode = 1;
+  string resultMessage = 2;
+}
+
+// Primitive schema Category promoted to wrapper message
+message Category { string value = 1; }
+
+// Primitive schema CategoryName promoted to wrapper message
+message CategoryName { string value = 1; }
+
+// Primitive schema CharacterNo promoted to wrapper message
+message CharacterNo { string value = 1; }
+
+message ContentResponsePostboxResponse {
+  repeated PostboxResponse content = 1;
+  int32 size = 2;
+}
+
+message ContentResponseServiceInfoResponse {
+  repeated ServiceInfoResponse content = 1;
+  int32 size = 2;
+}
+
+// Primitive schema ExpireAt promoted to wrapper message
+message ExpireAt { int64 value = 1; }
+
+message GdisCharacterPost {
+  string category = 1;
+  int64 itemCount = 2;
+  repeated GdisItem items = 3;
+  map<string,GdisCharacterPostMessagevalue> message = 4;
+  int32 messageType = 5;
+  int64 postNo = 6;
+  string postboxId = 7;
+  bool read = 8;
+}
+
+message GdisCharacterPostMessagevalue {
+}
+
+message GdisDeleteCharacterPostRequest {
+  int64 memberNo = 1;
+  string nicknameNo = 2;
+  int64 postNo = 3;
+}
+
+message GdisGetCharacterPostsRequest {
+  int64 memberNo = 1;
+  string nicknameNo = 2;
+  int32 page = 3;
+  int32 size = 4;
+}
+
+message GdisGetCharacterPostsResponse {
+  int64 count = 1;
+  repeated GdisCharacterPost posts = 2;
+  int64 totalCount = 3;
+}
+
+message GdisItem {
+  map<string,GdisItemDatavalue> data = 1;
+  string itemId = 2;
+  int64 itemQuantity = 3;
+  string itemType = 4;
+}
+
+message GdisItemDatavalue {
+}
+
+message GdisSendCharacterPostRequest {
+  string body = 1;
+  string category = 2;
+  string categoryName = 3;
+  repeated GdisItem items = 4;
+  string locale = 5;
+  int64 memberNo = 6;
+  string nicknameNo = 7;
+  string postboxId = 8;
+  string senderId = 9;
+  string senderName = 10;
+  string title = 11;
+}
+
+message GmDeletePostRequest {
+  int64 postNo = 1;
+  string senderId = 2;
+}
+
+message GmDeletedPostResult {
+  int64 createdDate = 1;
+  string resultState = 2;
+  string senderId = 3;
+  int64 updatedDate = 4;
+}
+
+message GmGetPostRequest {
+  int64 endDate = 1;
+  int32 page = 2;
+  string search = 3;
+  string searchType = 4;
+  string sendType = 5;
+  int32 size = 6;
+  int64 startDate = 7;
+}
+
+message GmGetReservedPosts {
+  int64 endDate = 1;
+  int32 page = 2;
+  string search = 3;
+  string searchType = 4;
+  int32 size = 5;
+  int64 startDate = 6;
+}
+
+message GmGetUserDetailRequest {
+  string nicknameNo = 1;
+  int64 postNo = 2;
+}
+
+message GmReservedPost {
+  string body = 1;
+  int64 createdDate = 2;
+  repeated GdisItem items = 3;
+  int64 postNo = 4;
+  string recipients = 5;
+  int64 reservationDate = 6;
+  string senderId = 7;
+  string title = 8;
+}
+
+message GmReservedPostsResponse {
+  repeated GmReservedPost posts = 1;
+  int64 totalCount = 2;
+}
+
+message GmSendPostRequest {
+  string body = 1;
+  string category = 2;
+  string categoryName = 3;
+  int64 expireAt = 4;
+  repeated GdisItem items = 5;
+  repeated string nicknameNos = 6;
+  string postboxId = 7;
+  RecipientCriteria recipientCriteria = 8;
+  string recipientType = 9;
+  int64 reservationDate = 10;
+  string senderId = 11;
+  string senderName = 12;
+  string title = 13;
+}
+
+message GmSentPost {
+  AllTypeRecipients allTypeRecipients = 1;
+  string body = 2;
+  bool deleted = 3;
+  repeated GdisItem items = 4;
+  int64 postNo = 5;
+  string recipients = 6;
+  string sendType = 7;
+  string senderId = 8;
+  int64 sentDate = 9;
+  string title = 10;
+}
+
+message GmSentPostUserDetail {
+  bool itemSent = 1;
+  string nicknameNo = 2;
+}
+
+message GmSentPostUserDetailResponse {
+  repeated GmSentPostUserDetail content = 1;
+}
+
+message GmSentPostsResponse {
+  repeated GmSentPost posts = 1;
+  int64 totalCount = 2;
+}
+
+message GmToolMetaData {
+  string category = 1;
+  string categoryName = 2;
+  string postboxId = 3;
+}
+
+message Item {
+  map<string,google.protobuf.Value> data = 1; // 预留字段
+  string itemId = 2; // 道具ID
+  int32 itemTag = 3; // 道具标签，根据道具数据库得知：  * `2` - 欢乐校园  * `3` - 职业模拟器  * `4` - 夺宝跑酷  * `5` - (花园广场、密石林、展览馆、花园广场、护卫战、丘陵单人战、丘陵双人战等)  * `6` - 英雄学校
+  string itemType = 4; // 道具类型
+  int64 quantity = 5; // 道具数量
+}
+
+// Primitive schema MemberNo promoted to wrapper message
+message MemberNo { int64 value = 1; }
+
+message Message {
+  oneof one_of {
+    MessageChoice1 choice_1 = 1;
+  }
+}
+
+message MessageChoice1 {
+  string body = 1;
+  string language = 2;
+  string title = 3;
+}
+
+// Primitive schema MessageType promoted to wrapper message
+message MessageType { int32 value = 1; }
+
+message PBRecipientUser {
+  string characterNo = 1;
+  string name = 2; // 游戏角色昵称
+  string userType = 3;
+}
+
+message PBSendPostRequest {
+  PBSendPostRequestRecipientCriteria RecipientCriteria = 1;
+  string category = 2;
+  string categoryName = 3;
+  repeated string countryCodes = 4;
+  int64 expireAt = 5;
+  repeated Item items = 6;
+  int32 messageType = 7;
+  repeated Message messages = 8; // 信息列表
+  string postTransactionId = 9;
+  string recipientType = 10; // * `ALL`: 全部玩家可接收 * `RECIPIENT_LIST`: 指定列表玩家可接收
+  repeated PBRecipientUser recipients = 11;
+  PBUser sender = 12;
+}
+
+message PBSendPostRequestRecipientCriteria {
+  repeated string joinCountryCodes = 1;
+  repeated string openIdTypes = 2;
+}
+
+message PBSendPostResponse {
+  int64 postNo = 1; // 邮件编号
+}
+
+message PBUser {
+  string characterId = 1;
+  string name = 2; // 사용자 명<br/| - UserType.SYSTEM, UserType.CHARACTER일 경우 사용
+  string systemId = 3; // System ID<br/| - UserType.SYSTEM일 경우 필수
+  string userType = 4;
+}
+
+message PBUserPostCountSummary {
+  int64 notItemSent = 1; // 邮件是否未领取附件  * `0` - No  * `1` - Yes
+  string postboxId = 2;
+  int64 unread = 3; // 邮件是否未读   * `0` - No   * `1` - Yes
+}
+
+message PBUserPostCountSummaryResponse {
+  repeated PBUserPostCountSummary list = 1;
+}
+
+// Primitive schema Page promoted to wrapper message
+message Page { int64 value = 1; }
+
+message PageResponsePostResponse {
+  repeated PostResponse content = 1;
+  int32 number = 2;
+  int32 numberOfElements = 3;
+  int32 size = 4;
+  int64 totalElements = 5;
+  int32 totalPages = 6;
+}
+
+message PageResponseReservationPostResponse {
+  repeated ReservationPostResponse content = 1;
+  int32 number = 2;
+  int32 numberOfElements = 3;
+  int32 size = 4;
+  int64 totalElements = 5;
+  int32 totalPages = 6;
+}
+
+message PageResponseUserPostDetail {
+  repeated UserPostDetail content = 1;
+  int32 number = 2;
+  int32 numberOfElements = 3;
+  int32 size = 4;
+  int64 totalElements = 5;
+  int32 totalPages = 6;
+}
+
+message PageResultUserPostDetail {
+  repeated UserPostDetail content = 1;
+  int64 page = 2;
+  int64 size = 3;
+}
+
+message PostGroupingResponse {
+  string category = 1;
+  int64 createdDate = 2;
+  bool deleted = 3;
+  int64 expireAt = 4;
+  string groupingId = 5;
+  repeated Item items = 6;
+  int32 messageType = 7;
+  repeated PostMessage messages = 8;
+  string name = 9;
+  int64 postNo = 10;
+  string postTransactionId = 11;
+  string postboxId = 12;
+  RecipientCriteria recipientCriteria = 13;
+  string recipientType = 14;
+  repeated User recipients = 15;
+  int64 reservationDate = 16;
+  int64 reservationPostNo = 17;
+  User sender = 18;
+  int64 updatedDate = 19;
+}
+
+message PostMessage {
+  string locale = 1;
+  map<string,PostMessageMsgvalue> msg = 2;
+}
+
+message PostMessageMsgvalue {
+}
+
+message PostMessageWrapper {
+  repeated PostMessage messages = 1;
+}
+
+// Primitive schema PostNo promoted to wrapper message
+message PostNo { int64 value = 1; }
+
+// Primitive schema PostNos promoted to wrapper message
+message PostNos { string value = 1; }
+
+message PostRequest {
+  string category = 1;
+  int64 expireAt = 2;
+  bool force = 3;
+  string groupingId = 4;
+  repeated Item items = 5;
+  int32 messageType = 6;
+  repeated PostMessage messages = 7;
+  string postTransactionId = 8;
+  string postboxId = 9;
+  RecipientCriteria recipientCriteria = 10;
+  string recipientType = 11;
+  repeated User recipients = 12;
+  User sender = 13;
+}
+
+message PostResponse {
+  string category = 1;
+  int64 createdDate = 2;
+  bool deleted = 3;
+  int64 expireAt = 4;
+  repeated Item items = 5;
+  int32 messageType = 6;
+  repeated PostMessage messages = 7;
+  int64 postNo = 8;
+  string postTransactionId = 9;
+  string postboxId = 10;
+  RecipientCriteria recipientCriteria = 11;
+  string recipientType = 12;
+  repeated User recipients = 13;
+  int64 reservationDate = 14;
+  int64 reservationPostNo = 15;
+  User sender = 16;
+  int64 updatedDate = 17;
+}
+
+// Primitive schema PostTransactionId promoted to wrapper message
+message PostTransactionId { string value = 1; }
+
+// Primitive schema PostboxId promoted to wrapper message
+message PostboxId { string value = 1; }
+
+message PostboxRequest {
+  int64 defaultValidPeriod = 1;
+  string name = 2;
+  string postboxId = 3;
+  repeated string pushToList = 4;
+  string serviceId = 5;
+}
+
+message PostboxResponse {
+  int64 createdDate = 1;
+  int64 defaultValidPeriod = 2;
+  bool deleted = 3;
+  string name = 4;
+  string postboxId = 5;
+  repeated string pushToList = 6;
+  string serviceId = 7;
+  int64 updatedDate = 8;
+}
+
+message RecipientCriteria {
+  repeated string joinCountryCodes = 1;
+  repeated string openIdTypes = 2;
+}
+
+message ReservationPostRequest {
+  string category = 1;
+  int64 expireAt = 2;
+  repeated Item items = 3;
+  int32 messageType = 4;
+  repeated PostMessage messages = 5;
+  string postTransactionId = 6;
+  string postboxId = 7;
+  RecipientCriteria recipientCriteria = 8;
+  string recipientType = 9;
+  repeated User recipients = 10;
+  int64 reservationDate = 11;
+  User sender = 12;
+}
+
+message ReservationPostResponse {
+  bool canceled = 1;
+  string category = 2;
+  int64 createdDate = 3;
+  int64 expireAt = 4;
+  repeated Item items = 5;
+  int32 messageType = 6;
+  repeated PostMessage messages = 7;
+  string name = 8;
+  int64 postNo = 9;
+  string postTransactionId = 10;
+  string postboxId = 11;
+  RecipientCriteria recipientCriteria = 12;
+  string recipientType = 13;
+  repeated User recipients = 14;
+  int64 reservationDate = 15;
+  int64 sendDate = 16;
+  User sender = 17;
+  bool sent = 18;
+  int64 updatedDate = 19;
+}
+
+message SendPostRequest {
+  RecipientCriteria RecipientCriteria = 1;
+  string category = 2;
+  string categoryName = 3;
+  int64 expireAt = 4;
+  repeated Item items = 5;
+  int32 messageType = 6;
+  repeated Message messages = 7; // 信息列表
+  string postTransactionId = 8;
+  string recipientType = 9; // * `A`: 全部玩家可接收 * `L`: 指定列表玩家可接收
+  repeated User recipients = 10; // 当且仅当，recipientType=L时，填写
+  User sender = 11;
+}
+
+message SendPostResponse {
+  repeated string failure = 1;
+  int64 postNo = 2;
+  string postTransactionId = 3;
+}
+
+// Primitive schema ServiceId promoted to wrapper message
+message ServiceId { string value = 1; }
+
+message ServiceInfoRequest {
+  GmToolMetaData gmToolMetaData = 1;
+  string serviceId = 2;
+  string userIdType = 3;
+}
+
+message ServiceInfoResponse {
+  int64 createdDate = 1;
+  bool deleted = 2;
+  string serviceId = 3;
+  string topic = 4;
+  int64 updatedDate = 5;
+  string userIdType = 6;
+}
+
+message ServiceResponse {
+  ServiceResponseResult result = 1;
+  int32 resultCode = 2;
+  string resultMessage = 3;
+}
+
+message ServiceResponseResult {
+}
+
+message ServiceResponseListUserPostCountSummary {
+  repeated UserPostCountSummary result = 1;
+  int32 resultCode = 2;
+  string resultMessage = 3;
+}
+
+message ServiceResponsePageResultUserPostDetail {
+  PageResultUserPostDetail result = 1;
+  int32 resultCode = 2;
+  string resultMessage = 3;
+}
+
+message ServiceResponseUserPostCount {
+  UserPostCount result = 1;
+  int32 resultCode = 2;
+  string resultMessage = 3;
+}
+
+message ServiceResponseUserPostDetail {
+  UserPostDetail result = 1;
+  int32 resultCode = 2;
+  string resultMessage = 3;
+}
+
+// Primitive schema Size promoted to wrapper message
+message Size { int64 value = 1; }
+
+message SuccessFailureResponse {
+  repeated int64 failure = 1; // 失败（已知失败原因）的邮件编号列表
+  repeated int64 retryableFailure = 2; // 失败（未知失败原因）且可以重试的邮件编号列表
+  repeated int64 success = 3; // 处理成功的邮件编号列表
+}
+
+message User {
+  map<string,UserDatavalue> data = 1;
+  string name = 2;
+  string userId = 3;
+  string userType = 4;
+}
+
+message UserDatavalue {
+}
+
+// Primitive schema UserId promoted to wrapper message
+message UserId { string value = 1; }
+
+message UserPostCount {
+  int64 currentSize = 1; // 当前邮件数量
+  int64 maxSize = 2; // 邮箱邮件数量上限
+  string postboxId = 3;
+}
+
+message UserPostCountSummary {
+  int64 notItemSent = 1;
+  string postboxId = 2;
+  int64 read = 3;
+  int64 total = 4;
+  int64 unread = 5;
+}
+
+message UserPostDetail {
+  string category = 1;
+  int64 createdDate = 2;
+  bool deleted = 3;
+  int64 deletedDate = 4;
+  int64 expireAt = 5;
+  bool itemSent = 6;
+  int64 itemSentDate = 7;
+  repeated Item items = 8;
+  map<string,UserPostDetailMessagevalue> message = 9;
+  int32 messageType = 10;
+  int64 postNo = 11;
+  string postTransactionId = 12;
+  string postboxId = 13;
+  bool read = 14;
+  int64 readDate = 15;
+  bool revoked = 16;
+  int64 revokedDate = 17;
+  User sender = 18;
+  string serviceId = 19;
+  int64 updatedDate = 20;
+  string userId = 21;
+}
+
+message UserPostDetailMessagevalue {
+}
+
+// Primitive schema UserType promoted to wrapper message
+message UserType { string value = 1; }
+
+message V1User {
+  string characterId = 1; // userType=CHARACTER时必填，游戏角色ID
+  string name = 2; // 游戏角色名称
+  string systemId = 3; // 系统管理员ID，userType=SYSTEM时必填
+  string userType = 4;
+}
+
+message V1UserPostDetail {
+  string category = 1;
+  string categoryName = 2;
+  int64 createdDate = 3;
+  int64 expireAfter = 4; // it expires after a few milliseconds
+  int64 expireAt = 5; // expiration time, unit: millisecond
+  bool itemSent = 6; // 邮件附件是否已领取
+  int64 itemSentDate = 7; // 邮件附件领取时间戳
+  repeated Item items = 8; // 邮件附件列表
+  Message message = 9;
+  int32 messageType = 10;
+  int64 postNo = 11; // 邮件编号
+  string postTransactionId = 12; // 流水号，例如：uuid
+  string postboxId = 13; // 邮箱ID:  * `SGXQ-GM`  * `SGXQ-GENERAL`  * `SGXQ-MOD`  * `SGXQ-SANDBOX`
+  bool read = 14; // 是否已读
+  int64 readDate = 15; // 读取时间
+  V1User sender = 16;
+}
+

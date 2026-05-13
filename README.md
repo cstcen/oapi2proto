@@ -30,7 +30,7 @@ go build -o oapi2proto ./cmd/oapi2proto
 | `-go_pkg` | Value for `option go_package`. |
 | `-use-optional` | Emit `optional` for nullable scalar fields (default true). |
 | `-anyof` | `oneof` (default) or `repeat` (repeat first schema). |
-| `-sort` | Alphabetically sort schemas & fields for stable diffs (default true). |
+| `-sort` | Alphabetically sort schema/response names for stable diffs (default true). Message fields always follow the OpenAPI `properties` declaration order. |
 | `-parallel` | Worker count for per-file generation (directory multi-file mode). `0` = auto. Ignored in merged mode. |
 
 ## Modes
@@ -51,6 +51,7 @@ go build -o oapi2proto ./cmd/oapi2proto
 | `nullable` | Adds `optional` keyword for scalars if `-use-optional`. |
 | Arrays | `repeated <T>`; nested object/enum becomes separate top-level message/enum with parent-based name prefix. |
 | Maps | `type: object` with only `additionalProperties`. |
+| Field ordering | Message fields follow the source `properties` declaration order so appended fields stay at the end. |
 | Duplicate schema names (merge mode) | Later file overrides earlier definition. Count emitted as comment. |
 
 ## Scope & Limitations
@@ -59,7 +60,7 @@ go build -o oapi2proto ./cmd/oapi2proto
 - No remote `$ref` fetching (URLs / external files) currently.
 - Inline nested objects produce flattened top-level messages with parent-name prefix (no reuse dedup among identical anonymous shapes yet).
 - No structural conflict detection when overriding duplicates (last wins blindly).
-- Field number allocation resets per run; renumbering changes are possible if schema set changes (even though sorting helps stability).
+- Field number allocation resets per run; renumbering changes are still possible if the source property order changes.
 
 ## Roadmap Ideas
 
